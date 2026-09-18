@@ -21,6 +21,17 @@ store, so replaying twice appends nothing twice.
 **Replay stops at the first failure.** Records are appended in the order they
 were staged and the remainder stays pending. Skipping past a failure would
 reorder evidence and would hide a store that is still unwell.
+
+Stopping is not the same as wedging, and the difference is what the quarantine
+exists for. A failure the store will recover from - it is down, it is slow - is
+answered by replaying again later. A failure it will *never* recover from - the
+record declares a schema version this build cannot write, or is malformed - would
+otherwise block every record staged behind it for the life of the process, until
+the log fills and :class:`WriteAheadLogFullError` turns one bad record into a
+gateway that abstains on everything. :meth:`InMemoryWriteAheadLog.quarantine`
+moves such a record aside, deliberately and by name, so the queue behind it can
+drain. Quarantined records are still undurable evidence: they are counted, they
+are logged at error level, and they are not discarded by the log itself.
 """
 
 from __future__ import annotations
@@ -29,7 +40,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Final, Mapping, Protocol, Sequence, runtime_checkable
 
-from neuroharness.errors import EvidenceUnavailableError
+from neuroharness.errors import EvidenceUnavailableError, FailClosedError
 from neuroharness.evidence.chain import (
     FIELD_KIND,
     FIELD_RECORD_ID,
@@ -99,6 +110,17 @@ class ReplayReport:
         return self.failed_record_id is None and not self.remaining
 
     @property
+    def failed(self) -> bool:
+        """True when one record stopped the replay.
+
+        ``failure_reason_code`` says whether waiting will help:
+        ``EVIDENCE_UNAVAILABLE`` is a store that may recover, while
+        ``SCHEMA_INVALID`` is a record this build will never be able to write and
+        therefore a candidate for :meth:`InMemoryWriteAheadLog.quarantine`.
+        """
+        return self.failed_record_id is not None
+
+    @property
     def appended_record_ids(self) -> tuple[str, ...]:
         return tuple(result.record_id for result in self.appended)
 
@@ -116,7 +138,21 @@ class WriteAheadLog(Protocol):
         ...
 
     def replay(self, store: EvidenceStore) -> ReplayReport:
-        """Append staged records in order, stopping at the first failure."""
+        """Append staged records in order, stopping at the first failure.
+
+        Never raises on a record's own failure. A replay that propagated would
+        skip its own bookkeeping, so the records it *did* append would stay
+        staged and be retried forever; the failure is reported in the returned
+        :class:`ReplayReport` instead.
+        """
+        ...
+
+    def quarantine(self, record_id: str) -> StagedRecord | None:
+        """Move one staged record aside so the queue behind it can drain."""
+        ...
+
+    def quarantined(self) -> Sequence[StagedRecord]:
+        """Return the quarantined records, oldest first."""
         ...
 
     def discard(self, record_id: str) -> bool:
@@ -133,7 +169,7 @@ class InMemoryWriteAheadLog:
     tests through this protocol.
     """
 
-    __slots__ = ("_clock", "_lock", "_pending", "_max_pending")
+    __slots__ = ("_clock", "_lock", "_pending", "_quarantined", "_max_pending")
 
     def __init__(
         self,
@@ -146,6 +182,7 @@ class InMemoryWriteAheadLog:
         self._clock = clock
         self._lock = threading.RLock()
         self._pending: list[StagedRecord] = []
+        self._quarantined: list[StagedRecord] = []
         self._max_pending = max_pending
 
     def stage(self, record: Mapping[str, Any]) -> StagedRecord:
@@ -174,16 +211,31 @@ class InMemoryWriteAheadLog:
             record=plain_value(record),
         )
         with self._lock:
-            already = next((item for item in self._pending if item.record_id == record_id), None)
+            already = next(
+                (
+                    item
+                    for item in (*self._pending, *self._quarantined)
+                    if item.record_id == record_id
+                ),
+                None,
+            )
             if already is not None:
                 # Staging the same record twice is a retry, not a second record.
+                # Quarantined records are included: re-staging one would put the
+                # same un-appendable record back at the head of the queue and
+                # wedge the log again.
                 return already
-            if len(self._pending) >= self._max_pending:
+            # Quarantined records count against the bound. They are evidence
+            # that is still not durable, so setting one aside unblocks the
+            # replay queue without pretending the backlog shrank.
+            held = len(self._pending) + len(self._quarantined)
+            if held >= self._max_pending:
                 _LOG.error(
                     "evidence.wal.full",
                     tenant_id=tenant_id,
                     record_id=record_id,
                     pending=len(self._pending),
+                    quarantined=len(self._quarantined),
                     max_pending=self._max_pending,
                 )
                 raise WriteAheadLogFullError(
@@ -206,7 +258,23 @@ class InMemoryWriteAheadLog:
             return tuple(self._pending)
 
     def replay(self, store: EvidenceStore) -> ReplayReport:
-        """Append everything staged, in order, stopping at the first failure."""
+        """Append everything staged, in order, stopping at the first failure.
+
+        Every fail-closed error a record can provoke is caught, not just an
+        evidence outage. ``store.append`` also refuses a record whose schema
+        version this build cannot write (:class:`SchemaVersionError`) or whose
+        shape it cannot chain (:class:`MalformedRecordError`), and a propagating
+        replay would skip the bookkeeping below: the records it had already
+        appended would stay staged, every later replay would re-attempt them,
+        nothing would ever drain, and the log would fill until
+        :class:`WriteAheadLogFullError` made the gateway abstain on everything
+        (Constitution Art. II - an inability to evaluate must stop *execution*,
+        not the evidence path).
+
+        The failure is reported in the returned :class:`ReplayReport` instead;
+        ``failure_reason_code`` tells the operator whether to wait for the store
+        or to :meth:`quarantine` the record.
+        """
         with self._lock:
             queue = list(self._pending)
 
@@ -217,18 +285,18 @@ class InMemoryWriteAheadLog:
         written: set[str] = set()
 
         for staged in queue:
-            if store.has_record(staged.tenant_id, staged.record_id):
-                # Already durable: a crash between the append and the discard.
-                duplicates.append(staged.record_id)
-                written.add(staged.record_id)
-                continue
             try:
+                if store.has_record(staged.tenant_id, staged.record_id):
+                    # Already durable: a crash between the append and the discard.
+                    duplicates.append(staged.record_id)
+                    written.add(staged.record_id)
+                    continue
                 appended.append(store.append(staged.record))
             except DuplicateRecordError:
                 duplicates.append(staged.record_id)
                 written.add(staged.record_id)
                 continue
-            except EvidenceUnavailableError as exc:
+            except FailClosedError as exc:
                 failed_record_id = staged.record_id
                 failure_reason_code = exc.reason_code
                 _LOG.error(
@@ -263,30 +331,81 @@ class InMemoryWriteAheadLog:
         )
         return report
 
-    def discard(self, record_id: str) -> bool:
-        """Drop one staged record without appending it.
+    def quarantine(self, record_id: str) -> StagedRecord | None:
+        """Move one staged record out of the replay queue. ``None`` if absent.
 
-        Used when a record is known to be durable by another route. It is not a
-        way to make an inconvenient record go away: the caller has to name it,
-        and the drop is logged.
+        This is the release valve for a record the store will never accept: a
+        schema version this build cannot write, or a shape it cannot chain. Such
+        a record stops every replay at the same point forever, so without a way
+        to set it aside one un-appendable record costs the audit trail every
+        record staged behind it, and then - once the log fills - every decision
+        the gateway would otherwise have made.
+
+        It is deliberately *not* automatic and deliberately not a delete. The
+        caller names the record, the move is logged at error level, and the
+        record stays readable through :meth:`quarantined` and countable against
+        ``max_pending``, because it is still evidence that never became durable
+        (ADR-0006). Discarding it is a separate, equally named decision.
         """
+        wanted = str(record_id)
         with self._lock:
-            remaining = [item for item in self._pending if item.record_id != str(record_id)]
-            found = len(remaining) != len(self._pending)
-            self._pending = remaining
+            staged = next((item for item in self._pending if item.record_id == wanted), None)
+            if staged is None:
+                return None
+            self._pending = [item for item in self._pending if item.record_id != wanted]
+            self._quarantined.append(staged)
+            held = len(self._quarantined)
+        _LOG.error(
+            "evidence.wal.quarantine",
+            tenant_id=staged.tenant_id,
+            record_id=staged.record_id,
+            staged_at=staged.staged_at,
+            quarantined=held,
+        )
+        return staged
+
+    def quarantined(self) -> Sequence[StagedRecord]:
+        """Return the quarantined records, oldest first."""
+        with self._lock:
+            return tuple(self._quarantined)
+
+    def discard(self, record_id: str) -> bool:
+        """Drop one staged or quarantined record without appending it.
+
+        Used when a record is known to be durable by another route, or when an
+        operator has accepted the loss of a quarantined one. It is not a way to
+        make an inconvenient record go away: the caller has to name it, and the
+        drop is logged.
+        """
+        wanted = str(record_id)
+        with self._lock:
+            pending = [item for item in self._pending if item.record_id != wanted]
+            quarantined = [item for item in self._quarantined if item.record_id != wanted]
+            found = len(pending) != len(self._pending) or len(quarantined) != len(
+                self._quarantined
+            )
+            self._pending = pending
+            self._quarantined = quarantined
         if found:
-            _LOG.debug("evidence.wal.discard", record_id=str(record_id))
+            _LOG.debug("evidence.wal.discard", record_id=wanted)
         return found
 
     def discard_all(self) -> int:
-        """Drop every staged record and return how many were dropped."""
+        """Drop every staged and quarantined record and return how many."""
         with self._lock:
-            dropped = len(self._pending)
+            dropped = len(self._pending) + len(self._quarantined)
             self._pending = []
+            self._quarantined = []
         if dropped:
             _LOG.debug("evidence.wal.discard_all", dropped=dropped)
         return dropped
 
     def __len__(self) -> int:
+        """How many records are still waiting to become durable.
+
+        Quarantined records are included: they are held by this log and have not
+        reached the store, and a length that hid them would let a monitoring
+        dashboard report an empty backlog while evidence was missing.
+        """
         with self._lock:
-            return len(self._pending)
+            return len(self._pending) + len(self._quarantined)

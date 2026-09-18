@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -40,15 +41,24 @@ from neuroharness.seams import FrozenClock, SequenceIdGenerator
 from neuroharness.tokens.model import DecisionToken, SignedToken
 from neuroharness.tokens.nonce import (
     ConsumeOutcome,
+    DuplicateIssuanceError,
+    InMemoryIssuanceLedger,
     InMemoryNonceStore,
     InMemoryRevocationList,
+    IssuanceLedger,
 )
 from neuroharness.tokens.service import ConsumeResult, TokenService
 from neuroharness.tokens.signer import HmacSigner, MultiKeySigner
 
 START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
 TENANT = "acme"
+OTHER_TENANT = "globex"
 BROKER = "broker-1"
+
+#: Enough concurrent minters that an interleaving will be found if the ledger's
+#: conditional insert is not one step.
+ISSUE_WORKERS = 32
+ISSUE_POOL_SIZE = 8
 SECRET_A = b"a" * 32
 SECRET_B = b"b" * 32
 
@@ -56,6 +66,12 @@ SECRET_B = b"b" * 32
 def digest(seed: str) -> Digest:
     return Digest.from_hex(hashlib.sha256(seed.encode()).hexdigest())
 
+
+#: The decision every helper mints for unless a test names another. At most one
+#: token exists per decision (``ADR-0008``), so a test that needs two tokens
+#: names two decisions.
+DECISION = "dec-0001"
+OTHER_DECISION = "dec-0002"
 
 ENVELOPE = digest("envelope")
 OTHER_ENVELOPE = digest("other-envelope")
@@ -74,6 +90,7 @@ class Harness:
         signer: HmacSigner | MultiKeySigner | None = None,
         ttl_seconds: int = defaults.DEFAULT_TOKEN_TTL_SECONDS,
         bundle_grace_seconds: int = defaults.DEFAULT_BUNDLE_GRACE_SECONDS,
+        issuance_ledger: IssuanceLedger | None = None,
     ) -> None:
         self.clock = FrozenClock(START)
         self.signer = signer or HmacSigner(key_id="key-a", secret=SECRET_A)
@@ -85,6 +102,7 @@ class Harness:
             revocation_list=self.revocations,
             clock=self.clock,
             id_generator=SequenceIdGenerator("tok"),
+            issuance_ledger=issuance_ledger,
             ttl_seconds=ttl_seconds,
             bundle_grace_seconds=bundle_grace_seconds,
         )
@@ -98,10 +116,11 @@ class Harness:
         policy_bundle_digest: Digest = BUNDLE,
         record_hash: Digest | None = RECORD,
         tenant_id: str = TENANT,
+        decision_id: str = DECISION,
         ttl_seconds: int | None = None,
     ) -> SignedToken:
         return self.service.issue(
-            decision_id="dec-0001",
+            decision_id=decision_id,
             envelope_digest=envelope_digest,
             proposal_digest=PROPOSAL,
             policy_bundle_digest=policy_bundle_digest,
@@ -144,7 +163,7 @@ class TestIssue:
         signed = harness.issue()
         token = signed.token
         assert token.token_id == "tok-00000001"
-        assert token.decision_id == "dec-0001"
+        assert token.decision_id == DECISION
         assert token.envelope_digest == ENVELOPE
         assert token.proposal_digest == PROPOSAL
         assert token.policy_bundle_digest == BUNDLE
@@ -162,8 +181,10 @@ class TestIssue:
         assert signed.signature
 
     def test_identifiers_come_from_the_injected_generator(self, harness: Harness) -> None:
-        assert harness.issue().token.token_id == "tok-00000001"
-        assert harness.issue().token.token_id == "tok-00000002"
+        # Two decisions, because one decision mints at most one token
+        # (``ADR-0008``); the property under test is the identifier source.
+        assert harness.issue(decision_id=DECISION).token.token_id == "tok-00000001"
+        assert harness.issue(decision_id=OTHER_DECISION).token.token_id == "tok-00000002"
 
     def test_ttl_may_be_overridden_per_action_class(self, harness: Harness) -> None:
         token = harness.issue(ttl_seconds=15).token
@@ -228,6 +249,111 @@ class TestIssue:
         harness.clock.set_healthy(False)
         with pytest.raises(ClockUnavailableError):
             harness.issue()
+
+
+class TestAtMostOneTokenPerDecision:
+    """``ADR-0008``: one evaluation authorises exactly one action.
+
+    Single use (``FR-22``) is enforced per ``token_id``, so it cannot see two
+    *different* tokens minted for one decision: before the issuance ledger, two
+    ``issue`` calls with identical arguments produced two token ids that both
+    verified and both consumed as a first use against the same envelope digest,
+    which is one evaluation and two authorised executions.
+    """
+
+    @pytest.mark.mutation
+    def test_a_second_issue_for_one_decision_is_refused(self, harness: Harness) -> None:
+        harness.issue(decision_id=DECISION)
+        with pytest.raises(DuplicateIssuanceError) as caught:
+            harness.issue(decision_id=DECISION)
+        assert caught.value.reason_code.name is ReasonName.HARNESS_UNHEALTHY
+
+    @pytest.mark.mutation
+    def test_two_issues_for_one_decision_cannot_both_dispatch(
+        self, harness: Harness
+    ) -> None:
+        """The defect, stated as the property it breaks.
+
+        Before the fix both tokens reached ``permits_dispatch``. Now the second
+        mint never happens, so there is exactly one dispatchable token in
+        existence for this decision.
+        """
+        first = harness.issue(decision_id=DECISION)
+        with pytest.raises(DuplicateIssuanceError):
+            harness.issue(decision_id=DECISION)
+
+        assert harness.consume(first).permits_dispatch is True
+        # And the one token that does exist still spends only once.
+        assert harness.consume(first).permits_dispatch is False
+
+    def test_the_refusal_is_not_widened_to_a_different_envelope(
+        self, harness: Harness
+    ) -> None:
+        """A second mint is refused even when it asks for a different action.
+
+        This is why ``issue`` raises rather than returning the first token:
+        answering a request for envelope B with an authorisation for envelope A
+        would be a substitution the caller never sees.
+        """
+        harness.issue(decision_id=DECISION, envelope_digest=ENVELOPE)
+        with pytest.raises(DuplicateIssuanceError):
+            harness.issue(decision_id=DECISION, envelope_digest=OTHER_ENVELOPE)
+
+    def test_a_different_decision_still_mints(self, harness: Harness) -> None:
+        """Fail-closed must not become fail-shut for unrelated decisions."""
+        assert harness.issue(decision_id=DECISION).token.decision_id == DECISION
+        assert harness.issue(decision_id=OTHER_DECISION).token.decision_id == OTHER_DECISION
+
+    def test_a_different_tenant_may_reuse_a_decision_id(self, harness: Harness) -> None:
+        """The ledger key is ``(tenant_id, decision_id)``.
+
+        Keying on ``decision_id`` alone would let one tenant's identifier deny
+        another tenant's legitimate mint: a fail-closed outage caused by an
+        unrelated tenant.
+        """
+        harness.issue(decision_id=DECISION, tenant_id=TENANT)
+        assert harness.issue(decision_id=DECISION, tenant_id=OTHER_TENANT) is not None
+
+    def test_the_ledger_is_injectable_like_every_other_seam(self) -> None:
+        """Default-on, but replaceable by the durable implementation."""
+        ledger = InMemoryIssuanceLedger()
+        harness = Harness(issuance_ledger=ledger)
+        assert harness.service.issuance_ledger is ledger
+        harness.issue(decision_id=DECISION)
+        assert ledger.entry_for(tenant_id=TENANT, decision_id=DECISION) is not None
+
+    def test_a_service_built_without_a_ledger_still_has_one(self) -> None:
+        """The guarantee may not depend on whoever wired the service up."""
+        service = TokenService(
+            signer=HmacSigner(key_id="key-a", secret=SECRET_A),
+            nonce_store=InMemoryNonceStore(),
+            revocation_list=InMemoryRevocationList(),
+            clock=FrozenClock(START),
+            id_generator=SequenceIdGenerator("tok"),
+        )
+        assert isinstance(service.issuance_ledger, IssuanceLedger)
+
+    @pytest.mark.mutation
+    def test_concurrent_issue_yields_exactly_one_token(self) -> None:
+        """Atomic at mint time, not merely checked at mint time.
+
+        A read-then-write guard lets several threads all observe "unminted" and
+        all mint, which is exactly the situation a retry storm produces.
+        """
+        harness = Harness()
+
+        def attempt(_: int) -> SignedToken | None:
+            try:
+                return harness.issue(decision_id=DECISION)
+            except DuplicateIssuanceError:
+                return None
+
+        with ThreadPoolExecutor(max_workers=ISSUE_POOL_SIZE) as pool:
+            results = list(pool.map(attempt, range(ISSUE_WORKERS)))
+
+        minted = [signed for signed in results if signed is not None]
+        assert len(minted) == 1
+        assert len({signed.token.token_id for signed in minted}) == 1
 
 
 class TestVerify:

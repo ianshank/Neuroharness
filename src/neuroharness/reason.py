@@ -157,7 +157,10 @@ class ReasonCode:
             raise ValueError(f"reason {self.name.value} requires a subject")
         if not requires_subject and self.subject is not None:
             raise ValueError(f"reason {self.name.value} does not take a subject")
-        if self.subject is not None and not _SUBJECT_PATTERN.match(self.subject):
+        # ``fullmatch``, not ``match``: ``$`` also matches before a final
+        # newline, and a subject carrying one forges a line in a JSONL evidence
+        # export (``SEC-07``).
+        if self.subject is not None and not _SUBJECT_PATTERN.fullmatch(self.subject):
             raise ValueError(
                 f"reason subject {self.subject!r} is not an identifier; "
                 "reason codes never carry free text (SEC-07)"

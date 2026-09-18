@@ -54,6 +54,9 @@ __all__ = [
 
 _LOG = get_logger(__name__)
 
+#: File suffixes routed to the YAML parser rather than the JSON one.
+_YAML_SUFFIXES: Final[frozenset[str]] = frozenset({".yaml", ".yml"})
+
 #: Fields excluded from the canonical form before digesting, because they carry
 #: the integrity evidence itself and cannot cover themselves.
 UNSIGNED_FIELDS: Final[frozenset[str]] = frozenset({"digest", "signature", "signatures"})
@@ -295,17 +298,8 @@ def load_registry_file(
 def _parse_document(text: str, file_path: Path) -> Mapping[str, Any]:
     """Parse a registry document, choosing the format from the suffix."""
     suffix = file_path.suffix.lower()
-    if suffix in {".yaml", ".yml"}:
-        try:
-            import yaml  # type: ignore[import-untyped]
-        except ImportError as exc:  # pragma: no cover - depends on the environment
-            raise RegistryValidationError(
-                f"cannot read {file_path}: YAML registries need PyYAML installed"
-            ) from exc
-        try:
-            parsed = yaml.safe_load(text)
-        except yaml.YAMLError as exc:  # pragma: no cover - parser-specific
-            raise RegistryValidationError(f"malformed YAML in {file_path}: {exc}") from exc
+    if suffix in _YAML_SUFFIXES:
+        parsed = _parse_yaml(text, file_path)
     else:
         # parse_json, not json.loads: it refuses a repeated object key instead of
         # silently keeping the last one. A registry with two `mode` keys is a
@@ -323,6 +317,66 @@ def _parse_document(text: str, file_path: Path) -> Mapping[str, Any]:
             f"{file_path} does not contain a registry object (got {type(parsed).__name__})"
         )
     return parsed
+
+
+def _parse_yaml(text: str, file_path: Path) -> Any:
+    """Parse a YAML registry under the same strictness as the JSON path.
+
+    ``yaml.safe_load`` keeps the last of a repeated mapping key and says
+    nothing, which is exactly what :func:`neuroharness.canonical.parse_json`
+    refuses on the JSON side: a registry with two ``mode`` keys is a document
+    whose meaning depends on the parser, and the signer's parser is not
+    necessarily this one. One format being strict and the other lax means the
+    strictness is decorative - an attacker picks the lax one - and this document
+    decides which action classes are enforced (``FR-30``, ``FR-33``, ``SEC-05``).
+
+    Non-string keys are refused for the same reason: the digest is taken over
+    the JSON form, where ``1`` and ``"1"`` are one key, so a YAML document that
+    distinguishes them has two meanings and one digest.
+
+    The rejection happens here, before the digest is computed, because a
+    digest over a document the loader had to reinterpret proves nothing.
+    """
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError as exc:  # pragma: no cover - depends on the environment
+        raise RegistryValidationError(
+            f"cannot read {file_path}: YAML registries need PyYAML installed"
+        ) from exc
+
+    class _StrictLoader(yaml.SafeLoader):  # type: ignore[misc, name-defined]
+        """A safe loader whose mappings have exactly one value per key."""
+
+        def construct_mapping(self, node: Any, deep: bool = False) -> dict[str, Any]:
+            # Deliberately does not call ``flatten_mapping``: a YAML merge key
+            # would splice one mapping into another after this check, which is
+            # another way for a document to mean two things.
+            mapping: dict[str, Any] = {}
+            for key_node, value_node in node.value:
+                key = self.construct_object(key_node, deep=deep)
+                if not isinstance(key, str):
+                    raise yaml.constructor.ConstructorError(
+                        None,
+                        None,
+                        f"registry mapping key {key!r} is not a string; the digest "
+                        "is taken over the JSON form, where it would collide",
+                        key_node.start_mark,
+                    )
+                if key in mapping:
+                    raise yaml.constructor.ConstructorError(
+                        None,
+                        None,
+                        f"registry repeats the mapping key {key!r}; parsers disagree "
+                        "on which value wins, so the document has no single meaning",
+                        key_node.start_mark,
+                    )
+                mapping[key] = self.construct_object(value_node, deep=deep)
+            return mapping
+
+    try:
+        return yaml.load(text, Loader=_StrictLoader)
+    except yaml.YAMLError as exc:
+        raise RegistryValidationError(f"malformed YAML in {file_path}: {exc}") from exc
 
 
 def _load_resource_keys(raw: Any) -> ResourceKeyRegistry:

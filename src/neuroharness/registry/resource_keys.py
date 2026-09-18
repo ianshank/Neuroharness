@@ -84,7 +84,10 @@ def is_resource_key(value: str) -> bool:
     """
     if not isinstance(value, str) or len(value) > MAX_RESOURCE_KEY_LENGTH:
         return False
-    return RESOURCE_KEY_PATTERN.match(value) is not None
+    # ``fullmatch``, not ``match``: ``$`` also matches before a final newline,
+    # and the rendered key is the broker's lease identity, so a key with one
+    # appended is a second lease on one resource (``FR-25``).
+    return RESOURCE_KEY_PATTERN.fullmatch(value) is not None
 
 
 def split_resource_key(key: str) -> tuple[tuple[str, str], ...]:
@@ -158,7 +161,7 @@ def render_template(
                 "resource identifier; only strings and integers may be substituted"
             )
         text = str(value)
-        if not _ID_PATTERN.match(text):
+        if not _ID_PATTERN.fullmatch(text):
             raise RegistryValidationError(
                 f"argument {name!r} value {text!r} is not a resource identifier "
                 f"(expected {_ID_PATTERN.pattern})"
@@ -205,7 +208,7 @@ class ResourceKeyRegistry(BaseModel):
         decision was already recorded as ``ALLOW``.
         """
         for kind, members in self.enumerations.items():
-            if not _KIND_PATTERN.match(kind):
+            if not _KIND_PATTERN.fullmatch(kind):
                 raise ValueError(
                     f"resource kind {kind!r} is malformed; expected {_KIND_PATTERN.pattern} (FR-34)"
                 )
@@ -217,7 +220,7 @@ class ResourceKeyRegistry(BaseModel):
             if len(set(members)) != len(members):
                 raise ValueError(f"resource kind {kind!r} has duplicate members (FR-34)")
             for member in members:
-                if not _ID_PATTERN.match(member):
+                if not _ID_PATTERN.fullmatch(member):
                     raise ValueError(
                         f"resource kind {kind!r} member {member!r} is not a resource "
                         f"identifier (expected {_ID_PATTERN.pattern}) (FR-34)"

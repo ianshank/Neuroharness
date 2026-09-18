@@ -194,7 +194,10 @@ def _coerce_reason_code(value: object) -> ReasonCode:
     rendered = code.render()
     if len(rendered) > MAX_REASON_CODE_LENGTH:
         raise ValueError("rendered reason code exceeds the maximum length")
-    if not _REASON_CODE_RE.match(rendered):
+    # ``fullmatch``, not ``match``: ``$`` also matches before a final newline,
+    # so ``.match`` admitted a reason code with one appended even though the
+    # catalogue has no such member (``SEC-07``).
+    if not _REASON_CODE_RE.fullmatch(rendered):
         raise ValueError(
             f"reason code {rendered!r} is not in the closed catalogue or its subject "
             "is not a registry-shaped identifier (SEC-07)"

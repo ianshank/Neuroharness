@@ -15,7 +15,11 @@ from pydantic import ValidationError
 
 from neuroharness import defaults
 from neuroharness.config import UnregisteredClassPolicy
-from neuroharness.errors import RegistryValidationError, UnregisteredActionClassError
+from neuroharness.errors import (
+    RegistryValidationError,
+    SchemaVersionError,
+    UnregisteredActionClassError,
+)
 from neuroharness.models.common import CriticKind, EffectClass, Mode
 from neuroharness.reason import ESCALATABLE_REASONS, ReasonName
 from neuroharness.registry.models import (
@@ -27,6 +31,7 @@ from neuroharness.registry.models import (
     FactRequirement,
 )
 from neuroharness.registry.resource_keys import ResourceKeyRegistry
+from neuroharness.version import SchemaCompatibility, SchemaKind
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -39,6 +44,12 @@ SCHEMA: dict[str, Any] = {
 }
 
 ENUMERATIONS = {"service": ("checkout", "payments"), "target": ("staging", "production")}
+
+#: Taken from the single place that declares compatibility, not spelled out here.
+REGISTRY_SCHEMA_VERSION = SchemaCompatibility.written_version(SchemaKind.REGISTRY)
+
+#: A registry-schema version no build reads.
+UNREADABLE_SCHEMA_VERSION = "9.9"
 
 
 def critic(**overrides: Any) -> CriticRef:
@@ -403,7 +414,7 @@ def test_fact_requirement_rejects_an_empty_key() -> None:
 
 def registry(**overrides: Any) -> ActionClassRegistry:
     base: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": REGISTRY_SCHEMA_VERSION,
         "registry_version": "2026.09.18-1",
         "action_classes": (action_class(),),
         "resource_keys": ResourceKeyRegistry(enumerations=ENUMERATIONS),
@@ -706,3 +717,87 @@ def test_mode_has_no_default_and_must_be_stated() -> None:
     with pytest.raises(ValidationError) as exc:
         ActionClass(**payload)
     assert "mode" in message(exc)
+
+
+# --- F5: a signed document must not be editable after it is loaded -----------
+
+
+def test_argument_schema_cannot_be_mutated_in_place() -> None:
+    """A registry entry that can be mutated after load proves nothing (``FR-31``).
+
+    The registry is signed and its digest covers this schema, but pydantic's
+    ``frozen=True`` only blocks attribute assignment:
+    ``entry.argument_schema["additionalProperties"] = True`` used to succeed and
+    silently widen what the class accepts, under a signature taken over the
+    narrower document.
+    """
+    entry = action_class()
+
+    with pytest.raises(TypeError):
+        entry.argument_schema["additionalProperties"] = True
+    with pytest.raises(TypeError):
+        del entry.argument_schema["required"]
+    with pytest.raises(AttributeError):
+        entry.argument_schema.update({"additionalProperties": True})
+
+
+def test_a_nested_part_of_the_argument_schema_is_frozen_too() -> None:
+    """Widening an enum one level down is the same attack with an extra key."""
+    entry = action_class()
+
+    with pytest.raises(TypeError):
+        entry.argument_schema["properties"]["target"]["enum"] = ("anything",)
+    # Sequences inside a frozen document become tuples.
+    assert entry.argument_schema["required"] == ("service", "target")
+    with pytest.raises(TypeError):
+        entry.argument_schema["required"][0] = "something-else"
+
+
+def test_the_entry_does_not_share_structure_with_the_loaded_document() -> None:
+    """Freezing is also the copy, or the loader keeps a live handle on it."""
+    supplied: dict[str, Any] = {"type": "object", "additionalProperties": False}
+    entry = action_class(argument_schema=supplied)
+
+    supplied["additionalProperties"] = True
+
+    assert entry.argument_schema["additionalProperties"] is False
+
+
+def test_the_argument_schema_still_dumps_as_a_plain_document() -> None:
+    """The freeze may not leak into the wire form or into a JSON Schema validator."""
+    dumped = action_class().model_dump(mode="json")
+
+    assert type(dumped["argument_schema"]) is dict
+    assert dumped["argument_schema"] == SCHEMA
+
+
+# --- F6: the registry validates its own schema_version ----------------------
+
+
+def test_the_registry_refuses_a_schema_version_it_cannot_read() -> None:
+    """On the model, not only in ``load_registry`` (``FR-83``).
+
+    ``ActionEnvelope`` and ``DecisionRecord`` both validate theirs on the model.
+    The registry did not, so a hot reload, a cache rehydration or a hand-built
+    fixture could construct a registry declaring any version at all -- and this
+    object decides which action classes are enforced.
+    """
+    with pytest.raises(SchemaVersionError) as raised:
+        registry(schema_version=UNREADABLE_SCHEMA_VERSION)
+
+    assert raised.value.schema_kind == SchemaKind.REGISTRY
+    assert raised.value.found_version == UNREADABLE_SCHEMA_VERSION
+    assert raised.value.reason_code.render() == "SCHEMA_INVALID"
+
+
+def test_the_registry_accepts_the_version_this_build_reads() -> None:
+    assert registry().schema_version == REGISTRY_SCHEMA_VERSION
+
+
+def test_the_refusal_also_applies_to_a_rehydrated_document() -> None:
+    """``model_validate`` is the cache-rehydration path, and it is the same gate."""
+    document = registry().model_dump(mode="json")
+    document["schema_version"] = UNREADABLE_SCHEMA_VERSION
+
+    with pytest.raises(SchemaVersionError):
+        ActionClassRegistry.model_validate(document)

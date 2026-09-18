@@ -608,6 +608,108 @@ def test_load_registry_file_reports_malformed_yaml(tmp_path: Path) -> None:
         load_registry_file(path)
 
 
+# --- F8: the YAML path must be exactly as strict as the JSON one -------------
+
+
+def test_yaml_registry_refuses_a_duplicate_top_level_key(tmp_path: Path) -> None:
+    """``yaml.safe_load`` silently keeps the last value; the JSON path refuses.
+
+    One format being strict and the other lax means the strictness is
+    decorative: an attacker picks the lax one. A registry with two ``mode`` keys
+    is a document whose meaning depends on the parser, and the signer's parser
+    is not necessarily this one (``FR-33``, ``SEC-05``).
+    """
+    pytest.importorskip("yaml")
+    path = tmp_path / "registry.yaml"
+    path.write_text(
+        "schema_version: '1.0'\nregistry_version: 'r'\nmode: enforce\nmode: shadow\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RegistryValidationError, match="repeats the mapping key"):
+        load_registry_file(path)
+
+
+def test_yaml_registry_refuses_a_duplicate_key_inside_an_action_class(
+    tmp_path: Path, document: dict[str, Any]
+) -> None:
+    """The dangerous position: two ``mode`` keys on the class being enforced."""
+    yaml = pytest.importorskip("yaml")
+    path = tmp_path / "registry.yaml"
+    lines = yaml.safe_dump(document, sort_keys=True).splitlines()
+    # Give one action class a second, contradictory mode at the same indent.
+    for index, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith("mode:"):
+            indent = line[: len(line) - len(stripped)]
+            lines.insert(index + 1, f"{indent}mode: {Mode.SHADOW.value}")
+            break
+    else:  # pragma: no cover - the fixture always states a mode
+        pytest.fail("the reference document declares no mode to duplicate")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    with pytest.raises(RegistryValidationError, match="repeats the mapping key"):
+        load_registry_file(path)
+
+
+def test_yaml_registry_refuses_a_non_string_key(tmp_path: Path) -> None:
+    """The digest is taken over the JSON form, where ``1`` and ``"1"`` collide."""
+    pytest.importorskip("yaml")
+    path = tmp_path / "registry.yaml"
+    path.write_text("schema_version: '1.0'\n1: enforce\n", encoding="utf-8")
+
+    with pytest.raises(RegistryValidationError, match="is not a string"):
+        load_registry_file(path)
+
+
+def test_yaml_registry_refuses_a_merge_key(tmp_path: Path) -> None:
+    """A merge key splices one mapping into another after the duplicate check."""
+    pytest.importorskip("yaml")
+    path = tmp_path / "registry.yaml"
+    path.write_text(
+        "base: &b\n  mode: enforce\nschema_version: '1.0'\nentry:\n  <<: *b\n  mode: shadow\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RegistryValidationError, match="malformed YAML"):
+        load_registry_file(path)
+
+
+def test_a_well_formed_yaml_registry_still_loads(
+    tmp_path: Path, document: dict[str, Any]
+) -> None:
+    """Fail-closed must not become fail-shut for a legitimate YAML registry."""
+    yaml = pytest.importorskip("yaml")
+    path = tmp_path / "registry.yaml"
+    path.write_text(yaml.safe_dump(document, sort_keys=True), encoding="utf-8")
+
+    registry = load_registry_file(path)
+
+    assert registry.registry_version == document["registry_version"]
+    assert len(registry) == len(document["action_classes"])
+
+
+def test_the_yaml_refusal_precedes_the_digest(tmp_path: Path) -> None:
+    """A digest over a document the loader had to reinterpret proves nothing.
+
+    The duplicate is rejected while parsing, so no ``digest`` field is ever
+    consulted and the error is a parse refusal rather than an integrity one.
+    """
+    pytest.importorskip("yaml")
+    path = tmp_path / "registry.yaml"
+    path.write_text(
+        "schema_version: '1.0'\nregistry_version: 'r'\n"
+        "digest: 'sha256:" + "00" * 32 + "'\nmode: enforce\nmode: shadow\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RegistryValidationError) as raised:
+        load_registry_file(path)
+
+    assert not isinstance(raised.value, RegistryIntegrityError)
+    assert "repeats the mapping key" in str(raised.value)
+
+
 def test_load_registry_file_round_trips_a_resigned_document(
     tmp_path: Path, document: dict[str, Any]
 ) -> None:

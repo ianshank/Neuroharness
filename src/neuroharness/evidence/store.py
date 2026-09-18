@@ -31,10 +31,11 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Iterator, Mapping, Protocol, Sequence, runtime_checkable
 
-from neuroharness.errors import EvidenceUnavailableError, FailClosedError, SchemaVersionError
+from neuroharness.errors import EvidenceUnavailableError, FailClosedError
 from neuroharness.evidence.chain import (
     FIELD_KIND,
     FIELD_PREV_RECORD_HASH,
@@ -47,7 +48,6 @@ from neuroharness.evidence.chain import (
     GENESIS_SEQ,
     MAX_TENANT_ID_LENGTH,
     RESERVED_CHAIN_FIELDS,
-    SCHEMA_VERSION,
     ChainVerification,
     MalformedRecordError,
     RecordKind,
@@ -61,6 +61,7 @@ from neuroharness.models.common import Digest
 from neuroharness.observability.logging import get_logger
 from neuroharness.reason import ReasonName
 from neuroharness.seams import Clock, IdGenerator
+from neuroharness.version import SchemaCompatibility, SchemaKind
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, keeps store independent of wal
     from neuroharness.evidence.wal import ReplayReport, WriteAheadLog
@@ -480,13 +481,16 @@ def prepare_record(
     except ValueError as exc:
         raise MalformedRecordError(f"unknown decision-record kind: {kind!r}") from exc
 
-    declared_version = prepared.setdefault(FIELD_SCHEMA_VERSION, SCHEMA_VERSION)
-    if declared_version != SCHEMA_VERSION:
-        raise SchemaVersionError(
-            schema_kind="decision-record",
-            found_version=str(declared_version),
-            supported_versions=[SCHEMA_VERSION],
-        )
+    # The version a record is *stamped* with and the versions the store will
+    # *accept* are different questions, and asking them of the same constant is
+    # how the two drift. Stamping uses the one version this build writes;
+    # acceptance is delegated to the compatibility declaration, so widening the
+    # readable set stays the backwards-compatible change it claims to be and the
+    # store no longer refuses records DecisionRecord happily validates (``F4``).
+    declared_version = prepared.setdefault(
+        FIELD_SCHEMA_VERSION, SchemaCompatibility.written_version(SchemaKind.RECORD)
+    )
+    SchemaCompatibility.assert_readable(SchemaKind.RECORD, str(declared_version))
 
     record_id = prepared.get(FIELD_RECORD_ID)
     if record_id is None:
@@ -498,10 +502,42 @@ def prepare_record(
     if timestamp is None:
         # Through the Clock seam so that replay can drive time (``FR-71``).
         prepared[FIELD_TIMESTAMP] = clock.now().isoformat()
-    elif not isinstance(timestamp, str) or not timestamp:
-        raise MalformedRecordError(f"timestamp is not a timestamp: {timestamp!r}")
+    else:
+        _assert_replayable_timestamp(timestamp)
 
     return prepared
+
+
+def _assert_replayable_timestamp(timestamp: Any) -> None:
+    """Refuse a ``timestamp`` that cannot be read back as an instant.
+
+    ``FR-71`` replays a recorded decision "using the record's timestamp as now",
+    so this string is not a label: it is an input to a later evaluation, and it
+    is hash-chained the moment it is accepted. A truthy string was the only bar,
+    which admitted ``"yesterday"`` - unreplayable - and, worse, a naive local
+    timestamp, which replays *successfully* against whatever offset the replaying
+    host happens to have. Evidence is append-only (``ADR-0006``), so either one
+    becomes permanent.
+
+    An offset is therefore required, not merely a parseable shape. Raises
+    :class:`MalformedRecordError` rather than coercing: a record whose instant
+    the harness had to guess is not evidence of when anything happened.
+    """
+    if not isinstance(timestamp, str) or not timestamp:
+        raise MalformedRecordError(f"timestamp is not a timestamp: {timestamp!r}")
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except ValueError as exc:
+        raise MalformedRecordError(
+            f"timestamp is not an ISO-8601 instant: {timestamp!r}; "
+            "FR-71 replays a decision using this value as 'now'"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise MalformedRecordError(
+            f"timestamp {timestamp!r} carries no UTC offset; a naive instant "
+            "replays against the replaying host's zone, not the deciding host's "
+            "(FR-71, NFR-13)"
+        )
 
 
 def to_jsonl(records: Sequence[Mapping[str, Any]] | Iterator[Mapping[str, Any]]) -> Iterator[str]:

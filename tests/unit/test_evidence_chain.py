@@ -7,6 +7,7 @@ shown to be the record that was written.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import hmac
 from datetime import datetime, timezone
@@ -175,6 +176,57 @@ def test_reordering_is_detected(clock: FrozenClock) -> None:
     assert result.first_broken_index == 1
     # Every sequence number is still present, so nothing was removed: the run
     # is out of order rather than incomplete.
+    assert result.reason is ChainBreak.SEQUENCE_OUT_OF_ORDER
+
+
+def test_a_repeated_sequence_number_is_reported_as_disorder_not_a_gap(
+    clock: FrozenClock,
+) -> None:
+    """A repetition is not a deletion, and the label is what operators branch on.
+
+    ``[0, 1, 1]`` is not contiguous, so a contiguity test alone diagnosed a
+    repeated record as ``SEQUENCE_GAP`` -- "a record was deleted", which starts a
+    very different investigation from "a record was presented twice".
+    ``SEQUENCE_OUT_OF_ORDER`` documents itself as covering "reordered or
+    repeated" (``FR-70``).
+    """
+    records = _build_chain("acme", _CHAIN_LENGTH, clock=clock)
+    records[2] = copy.deepcopy(records[1])
+
+    result = verify_chain(records, expected_tenant_id="acme")
+
+    assert not result.ok
+    assert result.reason is ChainBreak.SEQUENCE_OUT_OF_ORDER
+
+
+def test_a_record_presented_twice_in_a_row_is_disorder_not_a_gap(
+    clock: FrozenClock,
+) -> None:
+    """The duplicate-delivery shape: the same record appended to the run."""
+    records = _build_chain("acme", _CHAIN_LENGTH, clock=clock)
+    records.append(copy.deepcopy(records[-1]))
+
+    result = verify_chain(records, expected_tenant_id="acme")
+
+    assert not result.ok
+    assert result.reason is ChainBreak.SEQUENCE_OUT_OF_ORDER
+
+
+def test_a_repetition_alongside_a_deletion_is_still_not_a_clean_gap(
+    clock: FrozenClock,
+) -> None:
+    """When both happened, say the thing that is certainly true.
+
+    A repeated number is direct evidence; a gap inferred from a run whose length
+    a repetition has already inflated is not.
+    """
+    records = _build_chain("acme", _CHAIN_LENGTH, clock=clock)
+    del records[2]
+    records.append(copy.deepcopy(records[0]))
+
+    result = verify_chain(records, expected_tenant_id="acme")
+
+    assert not result.ok
     assert result.reason is ChainBreak.SEQUENCE_OUT_OF_ORDER
 
 

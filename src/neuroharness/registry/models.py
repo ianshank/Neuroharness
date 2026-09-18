@@ -30,18 +30,32 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Collection, Final, Iterator, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
 from neuroharness import defaults
 from neuroharness.config import UnregisteredClassPolicy
 from neuroharness.errors import UnregisteredActionClassError
-from neuroharness.models.common import CriticKind, Digest, EffectClass, Mode
+from neuroharness.models.common import (
+    CriticKind,
+    Digest,
+    EffectClass,
+    FrozenJsonMapping,
+    Mode,
+)
 from neuroharness.reason import ESCALATABLE_REASONS, ReasonName
 from neuroharness.registry.resource_keys import (
     ResourceKeyRegistry,
     render_template,
     template_placeholders,
 )
+from neuroharness.version import SchemaCompatibility, SchemaKind
 
 __all__ = [
     "ConnectorKind",
@@ -193,7 +207,10 @@ class ActionClass(BaseModel):
     effect_class: EffectClass
 
     # -- contract -------------------------------------------------------------
-    argument_schema: dict[str, Any]
+    #: Read-only: the registry is signed and its digest covers this schema, so a
+    #: schema that can be mutated after load is a schema whose signature proves
+    #: nothing (``FR-31``, ``FR-32``).
+    argument_schema: FrozenJsonMapping
     resource_key_template: str | None = None
     connector_kind: ConnectorKind = ConnectorKind.SYNC
     lease_timeout_seconds: int = Field(default=defaults.DEFAULT_LEASE_TIMEOUT_SECONDS, ge=1)
@@ -514,6 +531,26 @@ class ActionClassRegistry(BaseModel):
     resource_keys: ResourceKeyRegistry = ResourceKeyRegistry()
 
     _by_key: dict[ClassKey, ActionClass] = PrivateAttr(default_factory=dict)
+
+    @field_validator("schema_version")
+    @classmethod
+    def _readable_version(cls, value: str) -> str:
+        """Refuse a version this build does not fully understand.
+
+        On the *model*, as :class:`~neuroharness.models.envelope.ActionEnvelope`
+        and :class:`~neuroharness.models.record.DecisionRecord` both do, and not
+        only in :func:`~neuroharness.registry.loader.load_registry`. The loader
+        is one way a registry comes into being; a hot reload (``FR-83``), a cache
+        rehydration and a hand-built fixture are others, and each of them used to
+        construct an ``ActionClassRegistry`` declaring any version at all. This
+        object decides which classes are enforced, so a shape this build does not
+        understand must not be constructible (Constitution Art. II).
+
+        Raises :class:`~neuroharness.errors.SchemaVersionError`, not a
+        ``ValueError``: it is a fail-closed outcome carrying ``SCHEMA_INVALID``.
+        """
+        SchemaCompatibility.assert_readable(SchemaKind.REGISTRY, value)
+        return value
 
     @model_validator(mode="after")
     def _index_classes(self) -> "ActionClassRegistry":

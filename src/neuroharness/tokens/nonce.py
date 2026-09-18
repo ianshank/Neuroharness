@@ -1,8 +1,15 @@
-"""Single-use enforcement and revocation (``FR-21``, ``FR-22``).
+"""At-most-once issuance, single use, and revocation (``FR-21``, ``FR-22``).
 
-A short-lived, digest-bound token still authorises one execution *repeatedly*
-unless something remembers that it was spent. That memory is the nonce store,
-and ``FR-22`` fixes two properties of it:
+"Exactly one action" has two halves, and this module holds both ledgers.
+
+The :class:`IssuanceLedger` is the minting half (``ADR-0008``): one evaluated
+decision may be minted for at most once. Without it, ``TokenService.issue``
+called twice with identical arguments yields two distinct ``token_id`` values
+that both verify and both spend as a first use against the same envelope.
+
+The :class:`NonceStore` is the spending half. A short-lived, digest-bound token
+still authorises one execution *repeatedly* unless something remembers that it
+was spent, and ``FR-22`` fixes two properties of that memory:
 
 1. Consumption is **atomic**: the check and the record are one step, or two
    brokers racing on the same token both win.
@@ -27,13 +34,19 @@ from enum import Enum
 from typing import Final, Protocol, runtime_checkable
 
 from neuroharness import defaults
+from neuroharness.errors import FailClosedError
 from neuroharness.models.common import Digest
+from neuroharness.reason import ReasonName
 
 __all__ = [
     "ConsumeOutcome",
     "NonceEntry",
     "NonceStore",
     "InMemoryNonceStore",
+    "DuplicateIssuanceError",
+    "IssuanceEntry",
+    "IssuanceLedger",
+    "InMemoryIssuanceLedger",
     "RevocationScope",
     "RevocationList",
     "InMemoryRevocationList",
@@ -288,3 +301,140 @@ class InMemoryRevocationList:
     def revoked_key_ids(self) -> frozenset[str]:
         with self._lock:
             return frozenset(self._keys)
+
+
+class DuplicateIssuanceError(FailClosedError):
+    """A second token was requested for a decision that already has one.
+
+    ``ADR-0008`` states that an approval means exactly one action. A token is
+    the only artefact that authorises execution (``FR-20``), so "one evaluation,
+    one authorisation" holds only if minting is guarded the way spending is:
+    without it, two ``issue`` calls with identical arguments produce two
+    different ``token_id`` values, both of which verify and both of which
+    consume as a first use against the same envelope digest.
+
+    The refusal is reported as ``HARNESS_UNHEALTHY`` rather than
+    ``TOKEN_INVALID``: nothing is wrong with any token, and the closed
+    ``TokenInvalidReason`` catalogue in the decision-record schema describes the
+    broker's refusals, not the mint's. ``HARNESS_UNHEALTHY`` is also an
+    infrastructure reason, so it can never escalate to a human approval -
+    correctly, because no human can vouch for a harness that just tried to
+    authorise one decision twice.
+    """
+
+    reason_name = ReasonName.HARNESS_UNHEALTHY
+
+
+@dataclass(frozen=True, slots=True)
+class IssuanceEntry:
+    """The single issuance a decision is allowed.
+
+    ``envelope_digest`` is kept because it answers the question an operator asks
+    when a duplicate is refused: was the second request for the same action, or
+    for a different one wearing the same decision id?
+    """
+
+    tenant_id: str
+    decision_id: str
+    token_id: str
+    envelope_digest: Digest
+    issued_at: datetime
+
+
+@runtime_checkable
+class IssuanceLedger(Protocol):
+    """Atomic at-most-once ledger for token *minting*, keyed per decision.
+
+    The counterpart of :class:`NonceStore`: that one makes a token spendable
+    once, this one makes a decision mintable once. Both exist because either
+    alone leaves the other half of "exactly one action" to caller discipline,
+    and ``ADR-0008`` does not rest on discipline.
+
+    The key is ``(tenant_id, decision_id)``. ``decision_id`` alone would let one
+    tenant's identifier collide with another's and deny a legitimate mint, which
+    is a fail-closed outage caused by an unrelated tenant.
+    """
+
+    def claim(
+        self,
+        *,
+        tenant_id: str,
+        decision_id: str,
+        token_id: str,
+        envelope_digest: Digest,
+        now: datetime,
+    ) -> IssuanceEntry | None:
+        """Atomically claim ``(tenant_id, decision_id)`` for ``token_id``.
+
+        Returns ``None`` when the claim succeeded, and the :class:`IssuanceEntry`
+        that already holds the key when it did not. The conditional insert is one
+        step, exactly as in :meth:`NonceStore.consume`: a read followed by a
+        write would let two threads racing on one decision both observe "unheld"
+        and both mint.
+
+        ``now`` comes from the caller's injected clock so that a replayed
+        decision (``FR-71``) claims with the record's own timestamp.
+        """
+        ...
+
+    def entry_for(self, *, tenant_id: str, decision_id: str) -> IssuanceEntry | None:
+        """Return the issuance recorded for a decision, for records and alerts."""
+        ...
+
+
+class InMemoryIssuanceLedger:
+    """Process-local issuance ledger guarded by a lock.
+
+    The lock makes :meth:`claim` the atomic conditional insert the protocol
+    requires. The PostgreSQL implementation replaces it with a unique constraint
+    on ``(tenant_id, decision_id)``, with the same contract and the same return
+    convention, so the tests written against this class describe that one too.
+
+    Entries are **never** purged, unlike :class:`InMemoryNonceStore`. That
+    asymmetry is deliberate. A nonce may be forgotten once no unexpired token
+    could still carry it, because the token service refuses an expired token
+    before it reaches the store. An issuance has no such backstop: forgetting it
+    is indistinguishable from never having minted, so a purge would re-open the
+    second-mint path the moment the first token expired - and a second mint is a
+    *fresh* token with a fresh lifetime, which is the whole defect.
+    """
+
+    __slots__ = ("_entries", "_lock")
+
+    def __init__(self) -> None:
+        self._entries: dict[tuple[str, str], IssuanceEntry] = {}
+        self._lock = threading.Lock()
+
+    def claim(
+        self,
+        *,
+        tenant_id: str,
+        decision_id: str,
+        token_id: str,
+        envelope_digest: Digest,
+        now: datetime,
+    ) -> IssuanceEntry | None:
+        key = (tenant_id, decision_id)
+        moment = now.astimezone(timezone.utc)
+        with self._lock:
+            existing = self._entries.get(key)
+            if existing is not None:
+                return existing
+            self._entries[key] = IssuanceEntry(
+                tenant_id=tenant_id,
+                decision_id=decision_id,
+                token_id=token_id,
+                envelope_digest=envelope_digest,
+                issued_at=moment,
+            )
+            return None
+
+    def entry_for(self, *, tenant_id: str, decision_id: str) -> IssuanceEntry | None:
+        with self._lock:
+            return self._entries.get((tenant_id, decision_id))
+
+    @property
+    def issued_count(self) -> int:
+        """How many distinct decisions have been minted for, for assertions."""
+        with self._lock:
+            return len(self._entries)

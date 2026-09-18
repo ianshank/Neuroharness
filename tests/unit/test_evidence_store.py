@@ -38,12 +38,30 @@ from neuroharness.evidence.store import (
 from neuroharness.evidence.wal import InMemoryWriteAheadLog
 from neuroharness.reason import ReasonName
 from neuroharness.seams import FrozenClock, SequenceIdGenerator
+from neuroharness import version as schema_version_module
+from neuroharness.version import SchemaCompatibility, SchemaKind
 
 _START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
 _TRACE_ID = "0" * 32
 _TENANT_A = "tenant-a"
 _TENANT_B = "tenant-b"
 _KEY_ID = "evidence-checkpoint-2026-09"
+
+#: A record-schema version no build reads, used to exercise the refusal.
+_UNREADABLE_SCHEMA_VERSION = "0.9"
+
+#: A plausible *next* record-schema version, used to widen the readable set.
+_NEXT_SCHEMA_VERSION = "1.2"
+
+#: Epoch seconds: a timestamp that is not even a string.
+_NUMERIC_TIMESTAMP = 1_726_660_800
+
+
+def _widened_record_versions() -> frozenset[str]:
+    """The readable record versions plus one more, as widening ``_READABLE`` does."""
+    return frozenset(
+        {*SchemaCompatibility.readable_versions(SchemaKind.RECORD), _NEXT_SCHEMA_VERSION}
+    )
 
 
 @pytest.fixture()
@@ -166,7 +184,7 @@ def test_append_refuses_a_caller_supplied_chain_position(
         pytest.param({"tenant_id": ""}, id="empty-tenant"),
         pytest.param({"tenant_id": "t" * 65}, id="oversized-tenant"),
         pytest.param({"record_id": ""}, id="empty-record-id"),
-        pytest.param({"timestamp": 1_726_660_800}, id="numeric-timestamp"),
+        pytest.param({"timestamp": _NUMERIC_TIMESTAMP}, id="numeric-timestamp"),
     ],
 )
 def test_append_refuses_a_malformed_record(
@@ -179,7 +197,130 @@ def test_append_refuses_a_malformed_record(
 
 def test_append_refuses_an_unreadable_schema_version(store: InMemoryEvidenceStore) -> None:
     with pytest.raises(SchemaVersionError):
-        store.append(_record(schema_version="0.9"))
+        store.append(_record(schema_version=_UNREADABLE_SCHEMA_VERSION))
+
+
+def test_the_store_stamps_the_version_this_build_writes() -> None:
+    """``chain.SCHEMA_VERSION`` is derived, not a second declaration (``F4``)."""
+    assert SCHEMA_VERSION == SchemaCompatibility.written_version(SchemaKind.RECORD)
+
+
+def test_widening_the_readable_set_makes_the_store_accept_the_new_version(
+    store: InMemoryEvidenceStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``version.py`` calls itself "the single place"; the store must obey it.
+
+    Widening ``_READABLE`` is documented there as a backwards-compatible change.
+    While the store compared against its own ``chain.SCHEMA_VERSION`` constant
+    instead, widening it made :class:`DecisionRecord` accept the new version
+    while the store still refused it - a record the harness can build and cannot
+    write, which per ``F3`` then wedges the write-ahead log behind it.
+    """
+    monkeypatch.setitem(
+        schema_version_module._READABLE, SchemaKind.RECORD, _widened_record_versions()
+    )
+
+    result = store.append(_record(schema_version=_NEXT_SCHEMA_VERSION))
+
+    assert result.record["schema_version"] == _NEXT_SCHEMA_VERSION
+    assert store.verify(_TENANT_A).ok
+
+
+def test_widening_the_readable_set_does_not_change_what_is_stamped(
+    store: InMemoryEvidenceStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Readable and written are different questions and must stay different.
+
+    A build that read 1.2 and started *writing* it the moment the set widened
+    would emit evidence older readers cannot parse, from a change the module
+    documents as backwards compatible.
+    """
+    monkeypatch.setitem(
+        schema_version_module._READABLE, SchemaKind.RECORD, _widened_record_versions()
+    )
+
+    result = store.append(_record())
+
+    assert result.record["schema_version"] == SchemaCompatibility.written_version(
+        SchemaKind.RECORD
+    )
+
+
+def test_narrowing_the_readable_set_makes_the_store_refuse(
+    store: InMemoryEvidenceStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check really is delegated, not merely coincidentally equal."""
+    monkeypatch.setitem(
+        schema_version_module._READABLE,
+        SchemaKind.RECORD,
+        frozenset({_NEXT_SCHEMA_VERSION}),
+    )
+
+    with pytest.raises(SchemaVersionError):
+        store.append(
+            _record(schema_version=SchemaCompatibility.written_version(SchemaKind.RECORD))
+        )
+
+
+# --- timestamps: FR-71 replays a decision using this value as "now" ----------
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        pytest.param("yesterday", id="prose"),
+        pytest.param("2026-09-18", id="date-only-no-offset"),
+        pytest.param("2026-09-18T12:00:00", id="naive-local"),
+        pytest.param("2026-13-01T12:00:00Z", id="impossible-month"),
+        pytest.param("   ", id="whitespace"),
+        pytest.param(_NUMERIC_TIMESTAMP, id="epoch-seconds"),
+    ],
+)
+def test_append_refuses_a_timestamp_it_could_not_replay(
+    store: InMemoryEvidenceStore, timestamp: Any
+) -> None:
+    """``FR-71`` replays a decision using the record's timestamp as ``now``.
+
+    Any non-empty string used to pass, and the value is hash-chained the moment
+    it is accepted, so an unreplayable or zone-less instant became permanent,
+    immutable evidence (``ADR-0006``). A naive local timestamp is the dangerous
+    one: it does not fail the replay, it succeeds against the replaying host's
+    offset instead of the deciding host's.
+    """
+    with pytest.raises(MalformedRecordError):
+        store.append(_record(timestamp=timestamp))
+    assert len(store) == 0
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        pytest.param("2026-09-18T12:00:00Z", id="zulu"),
+        pytest.param("2026-09-18T12:00:00+00:00", id="explicit-utc"),
+        pytest.param("2026-09-18T14:00:00+02:00", id="non-utc-offset"),
+        pytest.param("2026-09-18T12:00:00.123456+00:00", id="microseconds"),
+    ],
+)
+def test_append_accepts_any_offset_bearing_instant(
+    store: InMemoryEvidenceStore, timestamp: str
+) -> None:
+    """Fail-closed must not become fail-shut: an offset is the bar, not UTC.
+
+    The deciding host's own zone is legitimate evidence of where the decision
+    was made, so it is preserved rather than normalised.
+    """
+    result = store.append(_record(timestamp=timestamp))
+
+    assert result.record["timestamp"] == timestamp
+
+
+def test_a_stamped_timestamp_is_accepted_by_its_own_validation(
+    store: InMemoryEvidenceStore, clock: FrozenClock
+) -> None:
+    """The clock seam's own output must pass the gate it feeds."""
+    stamped = store.append(_record()).record["timestamp"]
+
+    assert store.append(_record(timestamp=stamped)).record["timestamp"] == stamped
 
 
 def test_append_refuses_a_duplicate_record_id(store: InMemoryEvidenceStore) -> None:
@@ -330,6 +471,7 @@ def test_checkpoint_signs_the_current_head(store: InMemoryEvidenceStore) -> None
 # --- outage: INV-05, NFR-12, MUT-13, MUT-21 -----------------------------------
 
 
+@pytest.mark.mutation
 def test_append_during_an_outage_raises_evidence_unavailable(
     store: InMemoryEvidenceStore,
 ) -> None:

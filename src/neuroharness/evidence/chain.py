@@ -44,6 +44,7 @@ from neuroharness.models.common import Digest
 # closed enumeration is two places for the schema to drift away from itself.
 from neuroharness.models.record import RecordKind
 from neuroharness.reason import ReasonName
+from neuroharness.version import SchemaCompatibility, SchemaKind
 
 __all__ = [
     "RecordKind",
@@ -77,8 +78,19 @@ __all__ = [
 # here so that no behaviour in this package turns on a bare literal and so that
 # a schema bump is a one-line, reviewable change.
 
-#: The decision-record schema version this build writes and reads.
-SCHEMA_VERSION: Final[str] = "1.1"
+#: The decision-record schema version this build writes, re-exported for the
+#: modules and fixtures that already name it here.
+#:
+#: Derived, never declared. :mod:`neuroharness.version` documents itself as the
+#: single place that says which versions a build reads and writes, and a second
+#: literal here would let the two disagree: widening ``_READABLE[RECORD]`` -
+#: which that module documents as a backwards-compatible change - would make
+#: :class:`~neuroharness.models.record.DecisionRecord` accept ``1.2`` while the
+#: evidence store still refused it, which is a record the harness can build and
+#: cannot write (``F4``). Reading is checked with
+#: :meth:`SchemaCompatibility.assert_readable`, not against this value, because
+#: a build may read more versions than it writes.
+SCHEMA_VERSION: Final[str] = SchemaCompatibility.written_version(SchemaKind.RECORD)
 
 #: Sequence number of the first record in a tenant's chain.
 GENESIS_SEQ: Final[int] = 0
@@ -241,9 +253,9 @@ def verify_chain(
 
     Detects, in this order per record, an altered payload (the stored hash no
     longer matches the content), a foreign record (a different tenant), a
-    deleted record (a missing sequence number), a reordering (all sequence
-    numbers present but out of order) and a broken link (the record does not
-    point at the record before it).
+    deleted record (a missing sequence number), a reordering *or repetition*
+    (no sequence number missing, but the run is not ascending) and a broken link
+    (the record does not point at the record before it).
 
     ``records`` may start part way through a chain, as :meth:`EvidenceStore.read`
     with a ``start_seq`` returns. Only a run that starts at :data:`GENESIS_SEQ`
@@ -267,14 +279,27 @@ def verify_chain(
         expected_tenant_id if expected_tenant_id is not None else str(records[0][FIELD_TENANT_ID])
     )
 
-    # A missing sequence number and a swapped pair look identical at the first
-    # disturbed record, so the distinction is made over the run as a whole: if
-    # every number in the range is present, nothing was deleted and what we are
-    # looking at is a reordering.
+    # A missing sequence number, a swapped pair and a repeated number all look
+    # identical at the first disturbed record, so the distinction is made over
+    # the run as a whole. The chain fails either way; the label is what an
+    # operator branches on, and "a record was deleted" starts a very different
+    # investigation from "a record was presented twice".
+    #
+    # A repetition is checked first because it is not a gap: ``[0, 1, 1]`` is
+    # not contiguous, so a contiguity test alone reports SEQUENCE_GAP for a run
+    # in which nothing is missing. ``SEQUENCE_OUT_OF_ORDER`` documents itself as
+    # covering "reordered or repeated", which is where a repetition belongs.
     sequence_numbers = [int(record[FIELD_SEQ]) for record in records]
+    repeated = len(set(sequence_numbers)) != len(sequence_numbers)
     lowest = min(sequence_numbers)
-    complete = sorted(sequence_numbers) == list(range(lowest, lowest + len(sequence_numbers)))
-    disorder = ChainBreak.SEQUENCE_OUT_OF_ORDER if complete else ChainBreak.SEQUENCE_GAP
+    contiguous = sorted(sequence_numbers) == list(
+        range(lowest, lowest + len(sequence_numbers))
+    )
+    disorder = (
+        ChainBreak.SEQUENCE_OUT_OF_ORDER
+        if repeated or contiguous
+        else ChainBreak.SEQUENCE_GAP
+    )
 
     previous: Mapping[str, Any] | None = None
     for index, record in enumerate(records):

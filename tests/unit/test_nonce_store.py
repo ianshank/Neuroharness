@@ -1,10 +1,11 @@
-"""Single-use consumption and revocation (``FR-21``, ``FR-22``, ``MUT-09``).
+"""At-most-once issuance, single use, and revocation (``FR-21``, ``FR-22``, ``MUT-09``).
 
-Two behaviours carry the weight here. Consumption must be atomic under
-concurrency, because a token that two brokers can both win authorises two
-executions of an action that was approved once. And a benign retry must not be
-reported as a replay, because an alert that fires on ordinary network behaviour
-is an alert operators learn to close unread.
+Three behaviours carry the weight here. Issuance must be atomic per decision,
+because a decision that two callers can both mint for authorises two executions
+of an action that was evaluated once (``ADR-0008``). Consumption must be atomic
+under concurrency, for the same reason one step later. And a benign retry must
+not be reported as a replay, because an alert that fires on ordinary network
+behaviour is an alert operators learn to close unread.
 """
 
 from __future__ import annotations
@@ -19,8 +20,10 @@ from neuroharness import defaults
 from neuroharness.models.common import Digest
 from neuroharness.tokens.nonce import (
     ConsumeOutcome,
+    InMemoryIssuanceLedger,
     InMemoryNonceStore,
     InMemoryRevocationList,
+    IssuanceLedger,
     NonceStore,
     RevocationList,
     RevocationScope,
@@ -28,7 +31,17 @@ from neuroharness.tokens.nonce import (
 
 START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
 TOKEN_ID = "tok-00000001"
+OTHER_TOKEN_ID = "tok-00000002"
 BROKER = "broker-1"
+TENANT = "acme"
+OTHER_TENANT = "globex"
+DECISION = "dec-0001"
+OTHER_DECISION = "dec-0002"
+
+#: Enough concurrent callers that an interleaving will be found if the
+#: conditional insert is not one step. Mirrors the nonce-store atomicity tests.
+CONCURRENT_WORKERS = 32
+POOL_SIZE = 8
 
 
 def digest(seed: str) -> Digest:
@@ -37,6 +50,29 @@ def digest(seed: str) -> Digest:
 
 ENVELOPE = digest("envelope")
 OTHER_ENVELOPE = digest("other-envelope")
+
+#: Far enough past any token lifetime that a retention-based purge would have
+#: dropped the entry. Named rather than inlined so the intent is the constant.
+DAYS_WELL_PAST_ANY_TOKEN_LIFETIME = 365
+
+
+def claim(
+    ledger: InMemoryIssuanceLedger,
+    *,
+    tenant_id: str = TENANT,
+    decision_id: str = DECISION,
+    token_id: str = TOKEN_ID,
+    envelope_digest: Digest = ENVELOPE,
+    at: datetime = START,
+) -> object:
+    """Claim a decision, returning ``None`` on success or the holding entry."""
+    return ledger.claim(
+        tenant_id=tenant_id,
+        decision_id=decision_id,
+        token_id=token_id,
+        envelope_digest=envelope_digest,
+        now=at,
+    )
 
 
 def consume(
@@ -215,3 +251,96 @@ class TestRevocationList:
         revocations.revoke_key("key-a")
         assert revocations.revoked_token_ids == {TOKEN_ID}
         assert revocations.revoked_key_ids == {"key-a"}
+
+
+class TestIssuanceLedger:
+    """One evaluation authorises exactly one action (``ADR-0008``, ``FR-20``).
+
+    Single use is enforced per ``token_id``, so it cannot see two *different*
+    tokens minted for one decision. That is this ledger's job, and these are the
+    tests that failed before it existed.
+    """
+
+    def test_satisfies_the_protocol(self) -> None:
+        assert isinstance(InMemoryIssuanceLedger(), IssuanceLedger)
+
+    def test_first_claim_succeeds(self) -> None:
+        """``None`` means "the key was free and is now yours"."""
+        ledger = InMemoryIssuanceLedger()
+        assert claim(ledger) is None
+        entry = ledger.entry_for(tenant_id=TENANT, decision_id=DECISION)
+        assert entry is not None
+        assert entry.token_id == TOKEN_ID
+        assert entry.envelope_digest == ENVELOPE
+        assert entry.issued_at == START
+
+    def test_second_claim_returns_the_holder_and_does_not_overwrite(self) -> None:
+        """The conflicting entry is returned so the refusal can name it."""
+        ledger = InMemoryIssuanceLedger()
+        claim(ledger)
+        existing = claim(ledger, token_id=OTHER_TOKEN_ID, envelope_digest=OTHER_ENVELOPE)
+        assert existing is not None
+        assert existing.token_id == TOKEN_ID
+        entry = ledger.entry_for(tenant_id=TENANT, decision_id=DECISION)
+        assert entry is not None
+        assert entry.token_id == TOKEN_ID
+
+    def test_a_different_decision_is_a_different_key(self) -> None:
+        ledger = InMemoryIssuanceLedger()
+        assert claim(ledger) is None
+        assert claim(ledger, decision_id=OTHER_DECISION, token_id=OTHER_TOKEN_ID) is None
+        assert ledger.issued_count == 2
+
+    def test_the_key_includes_the_tenant(self) -> None:
+        """One tenant's decision id must never deny another tenant's mint."""
+        ledger = InMemoryIssuanceLedger()
+        assert claim(ledger) is None
+        assert claim(ledger, tenant_id=OTHER_TENANT, token_id=OTHER_TOKEN_ID) is None
+
+    def test_an_unclaimed_decision_has_no_entry(self) -> None:
+        ledger = InMemoryIssuanceLedger()
+        assert ledger.entry_for(tenant_id=TENANT, decision_id=DECISION) is None
+
+    def test_claims_normalise_the_instant_to_utc(self) -> None:
+        """Replay compares recorded instants, so the ledger stores one zone."""
+        ledger = InMemoryIssuanceLedger()
+        elsewhere = START.astimezone(timezone(timedelta(hours=9)))
+        claim(ledger, at=elsewhere)
+        entry = ledger.entry_for(tenant_id=TENANT, decision_id=DECISION)
+        assert entry is not None
+        assert entry.issued_at == START
+        assert entry.issued_at.tzinfo == timezone.utc
+
+    def test_an_issuance_is_never_forgotten(self) -> None:
+        """Unlike a nonce, an issuance has no expiry backstop.
+
+        The token service refuses an expired token before the nonce store sees
+        it, so forgetting a spent nonce is safe. Nothing plays that role for a
+        mint: were the ledger to forget, the second ``issue`` would produce a
+        *fresh* token with a fresh lifetime, which is the whole defect.
+        """
+        ledger = InMemoryIssuanceLedger()
+        claim(ledger)
+        much_later = START + timedelta(days=DAYS_WELL_PAST_ANY_TOKEN_LIFETIME)
+        existing = claim(ledger, token_id=OTHER_TOKEN_ID, at=much_later)
+        assert existing is not None
+        assert existing.token_id == TOKEN_ID
+
+    def test_exactly_one_winner_among_concurrent_claims(self) -> None:
+        """The atomicity requirement, stated as a race.
+
+        A read-then-write ledger lets several threads all observe "unheld" and
+        all mint. One winner is the whole contract.
+        """
+        ledger = InMemoryIssuanceLedger()
+
+        def attempt(index: int) -> object:
+            return claim(ledger, token_id=f"tok-{index:08d}")
+
+        with ThreadPoolExecutor(max_workers=POOL_SIZE) as pool:
+            results = list(pool.map(attempt, range(CONCURRENT_WORKERS)))
+
+        assert results.count(None) == 1
+        holders = {r.token_id for r in results if r is not None}
+        assert len(holders) == 1
+        assert ledger.issued_count == 1

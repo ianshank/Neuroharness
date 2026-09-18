@@ -7,7 +7,11 @@ of its checks is part of the design rather than an implementation detail.
 saying "this exact envelope may run now", so every precondition that cannot be
 re-checked later is checked here: the evaluation record must already be durable
 (``INV-05``, ``FR-23``), a blocking mode must have produced an ``ALLOW``
-(``FR-20``), and a halted class mints nothing at all (``ADR-0016``).
+(``FR-20``), a halted class mints nothing at all (``ADR-0016``), and the
+decision must not already have been minted for (``ADR-0008``). That last one is
+enforced by the issuance ledger rather than by caller discipline: single use is
+checked per ``token_id``, so without it two ``issue`` calls for one decision
+produce two token ids that both verify and both dispatch.
 
 *Verify* reproduces the broker's obligations in ``FR-21`` and raises a distinct
 typed error per failure, because the reason code is the record and
@@ -47,7 +51,14 @@ from neuroharness.models.common import Digest, Mode, Verdict
 from neuroharness.observability.logging import get_logger
 from neuroharness.seams import Clock, IdGenerator
 from neuroharness.tokens.model import DecisionToken, SignedToken
-from neuroharness.tokens.nonce import ConsumeOutcome, NonceStore, RevocationList
+from neuroharness.tokens.nonce import (
+    ConsumeOutcome,
+    DuplicateIssuanceError,
+    InMemoryIssuanceLedger,
+    IssuanceLedger,
+    NonceStore,
+    RevocationList,
+)
 from neuroharness.tokens.signer import Signer, verify_signature
 
 __all__ = ["ConsumeResult", "TokenService", "MIN_TOKEN_TTL_SECONDS"]
@@ -60,6 +71,7 @@ _LOGGER = get_logger("neuroharness.tokens")
 
 _EVENT_ISSUED = "token_issued"
 _EVENT_ISSUE_REFUSED = "token_issue_refused"
+_EVENT_DUPLICATE_ISSUE = "token_duplicate_issue_refused"
 _EVENT_VERIFY_REFUSED = "token_verify_refused"
 _EVENT_CONSUME_REFUSED = "token_consume_refused"
 _EVENT_CONSUMED = "token_consumed"
@@ -100,6 +112,7 @@ class TokenService:
     __slots__ = (
         "_signer",
         "_nonce_store",
+        "_issuance_ledger",
         "_revocation_list",
         "_clock",
         "_id_generator",
@@ -116,6 +129,7 @@ class TokenService:
         revocation_list: RevocationList,
         clock: Clock,
         id_generator: IdGenerator,
+        issuance_ledger: IssuanceLedger | None = None,
         ttl_seconds: int = defaults.DEFAULT_TOKEN_TTL_SECONDS,
         bundle_grace_seconds: int = defaults.DEFAULT_BUNDLE_GRACE_SECONDS,
         logger: Any = None,
@@ -128,6 +142,13 @@ class TokenService:
             raise ConfigurationError("bundle_grace_seconds must not be negative")
         self._signer = signer
         self._nonce_store = nonce_store
+        # At-most-once minting is a property of the service, not of its caller,
+        # so the ledger is present by default and injectable like every other
+        # seam. A service assembled without one would be a service whose
+        # ADR-0008 guarantee depended on whoever wired it up.
+        self._issuance_ledger: IssuanceLedger = (
+            InMemoryIssuanceLedger() if issuance_ledger is None else issuance_ledger
+        )
         self._revocation_list = revocation_list
         self._clock = clock
         self._id_generator = id_generator
@@ -142,6 +163,11 @@ class TokenService:
     @property
     def bundle_grace_seconds(self) -> int:
         return self._bundle_grace_seconds
+
+    @property
+    def issuance_ledger(self) -> IssuanceLedger:
+        """The at-most-once minting ledger, exposed for operators and tests."""
+        return self._issuance_ledger
 
     @property
     def signing_key_id(self) -> str:
@@ -172,6 +198,13 @@ class TokenService:
         ``record_hash`` is typed optional so that a caller with no durable
         record can still call this and be refused, loudly and in one place,
         rather than being trusted to remember the ordering (``MUT-13``).
+
+        At most one token is ever minted for a ``(tenant_id, decision_id)`` pair.
+        A second attempt raises :class:`~neuroharness.tokens.nonce.DuplicateIssuanceError`
+        rather than returning the first token: the arguments of the second call
+        need not match the first, so handing back the earlier token would answer
+        a request for envelope *B* with an authorisation for envelope *A*
+        (``ADR-0008``, ``FR-20``).
         """
         now = self._clock.now()
         context: dict[str, Any] = {
@@ -234,6 +267,29 @@ class TokenService:
             key_alg=self._signer.algorithm,
             shadow=shadow,
         )
+        # ADR-0008: one evaluation authorises exactly one action. The claim is
+        # an atomic conditional insert placed *before* signing, so a losing
+        # racer never produces a signature at all -- there is no window in which
+        # two valid tokens exist for one decision, only one in which a second
+        # DecisionToken object exists unsigned and is discarded.
+        already_issued = self._issuance_ledger.claim(
+            tenant_id=tenant_id,
+            decision_id=decision_id,
+            token_id=token.token_id,
+            envelope_digest=envelope_digest,
+            now=now,
+        )
+        if already_issued is not None:
+            self._refuse(
+                _EVENT_DUPLICATE_ISSUE,
+                DuplicateIssuanceError,
+                "a decision token has already been issued for this decision",
+                issued_token_id=already_issued.token_id,
+                issued_envelope_digest=str(already_issued.envelope_digest),
+                issued_at=already_issued.issued_at.isoformat(),
+                **context,
+            )
+
         signature = self._signer.sign(token.signing_payload())
         self._logger.info(
             _EVENT_ISSUED,

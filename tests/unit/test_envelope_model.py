@@ -10,6 +10,7 @@ authorization rule a false positive.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Final
 from uuid import UUID
@@ -17,7 +18,9 @@ from uuid import UUID
 import pytest
 from pydantic import ValidationError
 
+from neuroharness.canonical.digest import PROPOSAL_DIGEST_PROJECTION, proposal_digest
 from neuroharness.errors import SchemaVersionError
+from neuroharness.models import envelope as envelope_module
 from neuroharness.models.common import FactStatus, Principal
 from neuroharness.models.envelope import (
     ABSENT,
@@ -181,6 +184,157 @@ def test_envelope_models_are_frozen(model: Any, field: str, value: Any) -> None:
     """
     with pytest.raises(ValidationError):
         setattr(model, field, value)
+
+
+# --- The module docstring must not restate a superseded projection (F10) -----
+
+
+def _proposal_digest_paragraph() -> str:
+    """Return the part of the envelope module docstring about the proposal digest."""
+    doc = envelope_module.__doc__ or ""
+    _, _, after = doc.partition("* the **proposal digest**")
+    paragraph, _, _ = after.partition("* the **envelope digest**")
+    assert paragraph, "the envelope module docstring no longer describes the two digests"
+    return paragraph
+
+
+def test_the_docstring_points_at_the_live_proposal_digest_projection() -> None:
+    """``ADR-0020`` narrowed ``ADR-0015``'s projection; the prose said otherwise.
+
+    The docstring repeated ``proposal + context.actor + context.action_class +
+    context.policy_bundle``, which is the superseded projection. The definition
+    of what a human approval authorises may exist in exactly one place, and that
+    place is the constant the code actually uses (``FR-04``, ``FR-43``).
+    """
+    paragraph = _proposal_digest_paragraph()
+
+    assert "PROPOSAL_DIGEST_PROJECTION" in paragraph
+    assert "ADR-0020" in paragraph
+
+
+def test_the_docstring_names_no_field_the_projection_does_not_cover() -> None:
+    """A structural check, so a future restatement cannot drift silently.
+
+    Every ``context.<field>`` the proposal-digest paragraph names must be a
+    prefix of a real path in the projection. ``context.action_class`` - the
+    field ``ADR-0020`` removed - is not, which is how this defect reads.
+    """
+    named = set(re.findall(r"``context\.([A-Za-z0-9_.]+)``", _proposal_digest_paragraph()))
+    covered = {
+        ".".join(path[1:][: depth])
+        for path in PROPOSAL_DIGEST_PROJECTION
+        if path[0] == "context"
+        for depth in range(1, len(path))
+    }
+
+    assert named <= covered, f"docstring names fields outside the projection: {named - covered}"
+
+
+# --- Mutable containers inside frozen models (F5) ----------------------------
+
+
+@pytest.mark.parametrize(
+    ("model_factory", "field", "key", "value"),
+    [
+        pytest.param(proposal, "arguments", "service", "somewhere-else", id="proposal-arguments"),
+        pytest.param(fresh_fact, "key", "service", "someone-elses-api", id="fact-key"),
+        pytest.param(context, "critic_versions", "smt.deploy", "0.0.0", id="critic-versions"),
+    ],
+)
+def test_mapping_fields_cannot_be_mutated_in_place(
+    model_factory: Any, field: str, key: str, value: Any
+) -> None:
+    """``frozen=True`` stops attribute assignment and nothing else.
+
+    A frozen model holding a plain ``dict`` is only as immutable as its
+    shallowest field: ``proposal.arguments["service"] = ...`` succeeded and
+    changed the proposal digest, which is what an approval binds to
+    (``FR-04``, ``ADR-0020``). The mapping is now read-only all the way down.
+    """
+    model = model_factory()
+    mapping = getattr(model, field)
+
+    with pytest.raises(TypeError):
+        mapping[key] = value
+    with pytest.raises(TypeError):
+        del mapping[key]
+    with pytest.raises(AttributeError):
+        mapping.update({key: value})
+
+
+def test_a_nested_container_is_frozen_too() -> None:
+    """Freezing only the outer level would move the hole one key deeper."""
+    model = proposal(arguments={"plan": {"replicas": 1, "regions": ["eu-west-1"]}})
+
+    with pytest.raises(TypeError):
+        model.arguments["plan"]["replicas"] = 99
+    # Sequences become tuples for the same reason a mapping becomes a proxy.
+    assert model.arguments["plan"]["regions"] == ("eu-west-1",)
+    with pytest.raises(TypeError):
+        model.arguments["plan"]["regions"][0] = "us-east-1"
+
+
+def test_the_model_does_not_share_structure_with_the_callers_mapping() -> None:
+    """Freezing is also the copy.
+
+    Otherwise the caller keeps a live handle on the model's own arguments and
+    can edit the digested document through it, which is the same defect with an
+    extra step.
+    """
+    supplied: dict[str, Any] = {"service": "example-api"}
+    model = proposal(arguments=supplied)
+
+    supplied["service"] = "somewhere-else"
+
+    assert model.arguments["service"] == "example-api"
+
+
+def test_the_proposal_digest_survives_an_attempted_mutation() -> None:
+    """The property the freeze exists for, stated as a digest (``FR-04``)."""
+    document = envelope().model_dump(mode="json")
+    before = proposal_digest(document)
+
+    model = envelope()
+    with pytest.raises(TypeError):
+        model.proposal.arguments["service"] = "somewhere-else"
+
+    assert proposal_digest(model.model_dump(mode="json")) == before
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        pytest.param("arguments", {"service": "example-api"}, id="arguments"),
+        pytest.param("claims", None, id="untouched-optional"),
+    ],
+)
+def test_frozen_mappings_still_dump_as_plain_json(field: str, expected: Any) -> None:
+    """The freeze may not leak into the wire form.
+
+    ``model_dump(mode="json")`` is handed to a JSON encoder, to a JSON Schema
+    validator and to the canonicaliser, none of which know what a
+    ``mappingproxy`` is.
+    """
+    dumped = proposal().model_dump(mode="json")
+    assert dumped[field] == expected
+    if expected is not None:
+        assert type(dumped[field]) is dict
+
+
+def test_a_frozen_mapping_round_trips_through_its_own_dump() -> None:
+    original = envelope()
+    reparsed = ActionEnvelope.model_validate(original.model_dump(mode="json"))
+
+    assert reparsed.proposal.arguments == original.proposal.arguments
+    assert reparsed.context.critic_versions == original.context.critic_versions
+    with pytest.raises(TypeError):
+        reparsed.proposal.arguments["service"] = "somewhere-else"
+
+
+def test_a_frozen_mapping_still_compares_equal_to_a_plain_dict() -> None:
+    """Read-only must not mean differently-typed to every existing caller."""
+    assert proposal().arguments == {"service": "example-api"}
+    assert dict(proposal().arguments) == {"service": "example-api"}
 
 
 def test_proposal_rejects_a_context_shaped_key() -> None:

@@ -12,10 +12,15 @@ exactly two halves and the split is the whole point:
 Two digests are taken over this document and the distinction matters
 (specification section 2, ``FR-04``):
 
-* the **proposal digest** covers ``proposal`` + ``context.actor`` +
-  ``context.action_class`` + ``context.policy_bundle`` - *what is being asked,
-  by whom, under which rules*. Approvals bind to it, so a re-fetched fact does
-  not silently invalidate a human decision.
+* the **proposal digest** covers *what is being asked, by whom, and under which
+  rules*. The projection itself is
+  :data:`neuroharness.canonical.digest.PROPOSAL_DIGEST_PROJECTION`, where every
+  inclusion and every omission is justified field by field; ``ADR-0020``
+  narrowed it from the wider projection ``ADR-0015`` first proposed. The field
+  list is deliberately not restated here, because a second copy of the
+  definition of what a human approval authorises is a second copy that can
+  drift. Approvals bind to this digest, so a re-fetched fact does not silently
+  invalidate a human decision.
 * the **envelope digest** covers the whole object, facts and timestamps
   included - *one evaluation*. Decision tokens bind to it.
 
@@ -30,7 +35,7 @@ Authoritative source: ``docs/sdd/schemas/action-envelope.schema.json``.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Any, Final
+from typing import Annotated, Any, Final, Mapping
 from uuid import UUID
 
 from pydantic import (
@@ -47,7 +52,16 @@ from pydantic import (
 from pydantic_core import to_jsonable_python
 
 from neuroharness.defaults import MAX_REPAIR_BUDGET
-from neuroharness.models.common import Digest, EffectClass, FactStatus, Mode, Principal
+from neuroharness.models.common import (
+    Digest,
+    EffectClass,
+    FactStatus,
+    FrozenJsonMapping,
+    FrozenMappingSerializer,
+    FrozenMappingValidator,
+    Mode,
+    Principal,
+)
 from neuroharness.reason import ESCALATABLE_REASONS, ReasonName
 from neuroharness.version import SchemaCompatibility, SchemaKind
 
@@ -314,7 +328,10 @@ class Proposal(WireModel):
 
     tool: ToolName
     intent: FactName
-    arguments: dict[str, Any]
+    #: Read-only: the proposal digest is taken over these arguments, so a
+    #: mapping the caller could still edit afterwards would give one proposal
+    #: two identities (``FR-04``, ``ADR-0020``).
+    arguments: FrozenJsonMapping
     claims: Annotated[tuple[Claim, ...], Field(max_length=MAX_CLAIMS)] | None = None
     batch_dependencies: (
         Annotated[
@@ -427,7 +444,12 @@ class Fact(WireModel):
     """
 
     name: FactName
-    key: dict[str, FactKeyValue]
+    #: Read-only: the fact key is part of the envelope digest and of the
+    #: provider cache identity; editing it after the fact was fetched would
+    #: relabel someone else's answer as this fact's (``FR-10``, ``INV-08``).
+    key: Annotated[
+        Mapping[str, FactKeyValue], FrozenMappingValidator, FrozenMappingSerializer
+    ]
     source: SourceName
     provider_version: VersionString
     status: FactStatus
@@ -531,7 +553,13 @@ class Context(WireModel):
     facts: Annotated[tuple[Fact, ...], Field(max_length=MAX_FACTS)]
     policy_bundle: VersionedArtifact
     registry: VersionedArtifact
-    critic_versions: dict[CriticVersionKey, VersionString]
+    #: Read-only: these versions are the record of *which* critics produced the
+    #: verdict, so an edit after evaluation rewrites the evidence (``FR-70``).
+    critic_versions: Annotated[
+        Mapping[CriticVersionKey, VersionString],
+        FrozenMappingValidator,
+        FrozenMappingSerializer,
+    ]
     parent_session_id: SessionId | None = None
     prior_decision_id: UUID | None = None
     batch: BatchPosition | None = None

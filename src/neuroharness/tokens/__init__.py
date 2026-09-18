@@ -7,7 +7,8 @@ four pieces, each replaceable without touching the others:
   signing encoding. Carries no signature, by construction.
 * :mod:`~neuroharness.tokens.signer` - algorithms and key rotation. The service
   never names an algorithm.
-* :mod:`~neuroharness.tokens.nonce` - atomic single use and revocation.
+* :mod:`~neuroharness.tokens.nonce` - atomic at-most-once issuance, atomic
+  single use, and revocation.
 * :mod:`~neuroharness.tokens.service` - issuance preconditions and the broker's
   verification obligations, each failing with its own typed reason.
 """
@@ -15,8 +16,12 @@ four pieces, each replaceable without touching the others:
 from neuroharness.tokens.model import DecisionToken, SignedToken
 from neuroharness.tokens.nonce import (
     ConsumeOutcome,
+    DuplicateIssuanceError,
+    InMemoryIssuanceLedger,
     InMemoryNonceStore,
     InMemoryRevocationList,
+    IssuanceEntry,
+    IssuanceLedger,
     NonceEntry,
     NonceStore,
     RevocationList,
@@ -39,9 +44,13 @@ __all__ = [
     "ConsumeOutcome",
     "ConsumeResult",
     "DecisionToken",
+    "DuplicateIssuanceError",
     "HmacSigner",
+    "InMemoryIssuanceLedger",
     "InMemoryNonceStore",
     "InMemoryRevocationList",
+    "IssuanceEntry",
+    "IssuanceLedger",
     "KeyMaterial",
     "KeyedVerifier",
     "MultiKeySigner",

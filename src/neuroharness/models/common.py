@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import re
 from enum import Enum
-from typing import Any, Final
+from types import MappingProxyType
+from typing import Annotated, Any, Final, Mapping
+
+from pydantic import AfterValidator, PlainSerializer
 
 from neuroharness.defaults import DIGEST_PREFIX
 
@@ -28,6 +31,69 @@ __all__ = [
     "Digest",
     "Principal",
     "PrincipalKind",
+    "freeze_document",
+    "thaw_document",
+    "FrozenMappingValidator",
+    "FrozenMappingSerializer",
+    "FrozenJsonMapping",
+]
+
+
+# --- Read-only documents inside frozen models --------------------------------
+
+
+def freeze_document(value: Any) -> Any:
+    """Return a deeply read-only copy of a JSON-shaped ``value``.
+
+    Pydantic's ``frozen=True`` stops attribute *assignment* and nothing else, so
+    a frozen model holding a plain ``dict`` is only as immutable as its
+    shallowest field: ``proposal.arguments["target"] = "somewhere-else"``
+    succeeds and changes the document's digest. An envelope that can be edited
+    after it is digested has no identity, and an identity that can drift is not
+    evidence (Constitution Art. IV, ``FR-04``); a registry entry that can be
+    mutated after load is a registry entry whose signature proves nothing
+    (``FR-31``).
+
+    Freezing is also the copy - every container is rebuilt - so the model shares
+    no mutable structure with the mapping the caller passed in and cannot be
+    edited through the caller's own reference either. Lists become tuples for
+    the same reason. Mirrors ``neuroharness.evidence.store._freeze``, which does
+    this for records once they are durable.
+    """
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): freeze_document(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(freeze_document(item) for item in value)
+    return value
+
+
+def thaw_document(value: Any) -> Any:
+    """Return a plain, JSON-shaped copy of a frozen document.
+
+    Serialisation only. ``model_dump(mode="json")`` must produce ordinary dicts
+    and lists, because the result is handed to a JSON encoder, to a JSON Schema
+    validator and to the canonicaliser, none of which are obliged to know what a
+    ``mappingproxy`` is.
+    """
+    if isinstance(value, Mapping):
+        return {str(key): thaw_document(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [thaw_document(item) for item in value]
+    return value
+
+
+#: Annotate a ``Mapping`` field with this to deep-freeze it after validation.
+FrozenMappingValidator: Final = AfterValidator(freeze_document)
+
+#: Pair it with this so the field still dumps as a plain dict.
+FrozenMappingSerializer: Final = PlainSerializer(
+    thaw_document, return_type=dict, when_used="always"
+)
+
+#: A read-only ``{str: anything}`` document: an agent-authored argument map, or
+#: a registry entry's JSON Schema. Both are digested, so neither may be edited.
+FrozenJsonMapping = Annotated[
+    Mapping[str, Any], FrozenMappingValidator, FrozenMappingSerializer
 ]
 
 
@@ -243,7 +309,10 @@ class Digest(str):
     __slots__ = ()
 
     def __new__(cls, value: str) -> Digest:
-        if not isinstance(value, str) or not _DIGEST_PATTERN.match(value):
+        # ``fullmatch``, not ``match``: Python's ``$`` also matches immediately
+        # before a final newline, so ``.match`` accepts a digest with one
+        # appended -- a second spelling of one document's identity.
+        if not isinstance(value, str) or not _DIGEST_PATTERN.fullmatch(value):
             raise ValueError(f"not a sha256 digest: {value!r}")
         return super().__new__(cls, value)
 
@@ -288,7 +357,13 @@ class Principal(str):
     __slots__ = ()
 
     def __new__(cls, value: str) -> Principal:
-        if not isinstance(value, str) or not _PRINCIPAL_PATTERN.match(value):
+        # ``fullmatch``, not ``match``. Separation of duties (``FR-42``,
+        # ``FR-46``, ``SEC-13``) is an equality or membership test over this
+        # type, and ``$`` also matches before a final newline: with ``.match``,
+        # ``"user:alice\n"`` constructed, reported ``.kind`` as USER and
+        # compared UNEQUAL to ``"user:alice"``, so one human could propose as
+        # the first and approve as the second.
+        if not isinstance(value, str) or not _PRINCIPAL_PATTERN.fullmatch(value):
             raise ValueError(f"not a principal: {value!r}")
         return super().__new__(cls, value)
 

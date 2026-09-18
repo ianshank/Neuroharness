@@ -30,12 +30,24 @@ from neuroharness.evidence.wal import (
 )
 from neuroharness.reason import ReasonName
 from neuroharness.seams import FrozenClock, SequenceIdGenerator
+from neuroharness.version import SchemaCompatibility, SchemaKind
 
 _START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
 _TRACE_ID = "0" * 32
 _TENANT_A = "tenant-a"
 _TENANT_B = "tenant-b"
 _OUTAGE_RECORDS = 3
+
+#: The version every well-formed fixture declares, taken from the one place that
+#: declares it rather than repeated here (``F4``).
+_RECORD_SCHEMA_VERSION = SchemaCompatibility.written_version(SchemaKind.RECORD)
+
+#: A record-schema version no build reads. Derived, so that widening the readable
+#: set can never quietly turn these fixtures into valid records.
+_UNREADABLE_SCHEMA_VERSION = "9999.0"
+
+#: A ``kind`` outside ``RecordKind``: the shape ``MalformedRecordError`` names.
+_UNKNOWN_RECORD_KIND = "not-a-record-kind"
 
 
 @pytest.fixture()
@@ -61,7 +73,7 @@ def wal(clock: FrozenClock) -> InMemoryWriteAheadLog:
 def _staged_record(record_id: str, tenant_id: str = _TENANT_A, **overrides: Any) -> dict[str, Any]:
     """A record as the writer stages it: identity and time already stamped."""
     record: dict[str, Any] = {
-        "schema_version": "1.1",
+        "schema_version": _RECORD_SCHEMA_VERSION,
         "record_id": record_id,
         "tenant_id": tenant_id,
         "kind": RecordKind.EVALUATION.value,
@@ -326,6 +338,173 @@ def test_a_replay_report_is_frozen(store: InMemoryEvidenceStore, wal: InMemoryWr
         report.attempted = 5  # type: ignore[misc]
 
 
+# --- un-appendable records: stopping without wedging ---------------------------
+
+
+def test_an_unreadable_schema_version_does_not_propagate_out_of_replay(
+    store: InMemoryEvidenceStore, wal: InMemoryWriteAheadLog
+) -> None:
+    """The wedge, reproduced.
+
+    ``store.append`` refuses more than an evidence outage: a record declaring a
+    schema version this build cannot write raises ``SchemaVersionError``, and a
+    malformed one raises ``MalformedRecordError``. Both are ``FailClosedError``
+    but neither is ``EvidenceUnavailableError``, so both used to escape
+    ``replay()`` before it reached the block that drains ``_pending``. The
+    records that *had* been appended therefore stayed staged, every later replay
+    re-attempted them and changed nothing, and the log filled until
+    ``WriteAheadLogFullError`` made the gateway abstain on everything (``FR-23``,
+    Constitution Art. II).
+    """
+    wal.stage(_staged_record("rec-bad", schema_version=_UNREADABLE_SCHEMA_VERSION))
+    wal.stage(_staged_record("rec-good"))
+
+    report = wal.replay(store)
+
+    assert report.failed is True
+    assert report.ok is False
+    assert report.failed_record_id == "rec-bad"
+    assert report.failure_reason_code is not None
+    assert report.failure_reason_code.name is ReasonName.SCHEMA_INVALID
+    assert report.appended == ()
+    assert report.remaining == ("rec-bad", "rec-good")
+
+
+def test_replaying_a_wedged_log_again_changes_nothing(
+    store: InMemoryEvidenceStore, wal: InMemoryWriteAheadLog
+) -> None:
+    """Which is why a release valve is needed and not merely nicer errors."""
+    wal.stage(_staged_record("rec-bad", schema_version=_UNREADABLE_SCHEMA_VERSION))
+    wal.stage(_staged_record("rec-good"))
+
+    first = wal.replay(store)
+    second = wal.replay(store)
+
+    assert first.remaining == second.remaining == ("rec-bad", "rec-good")
+    assert len(store) == 0
+
+
+def test_a_malformed_record_also_stops_rather_than_raises(
+    store: InMemoryEvidenceStore, wal: InMemoryWriteAheadLog
+) -> None:
+    """``MalformedRecordError`` is the other escape the narrow catch missed."""
+    wal.stage(_staged_record("rec-bad", kind=_UNKNOWN_RECORD_KIND))
+    wal.stage(_staged_record("rec-good"))
+
+    report = wal.replay(store)
+
+    assert report.failed_record_id == "rec-bad"
+    assert report.failure_reason_code is not None
+    assert report.failure_reason_code.name is ReasonName.SCHEMA_INVALID
+    assert report.remaining == ("rec-bad", "rec-good")
+
+
+def test_records_appended_before_the_failure_are_not_re_attempted(
+    store: InMemoryEvidenceStore, wal: InMemoryWriteAheadLog
+) -> None:
+    """The bookkeeping the propagating replay used to skip.
+
+    Without it the successful appends stayed staged, so the next replay
+    re-offered them and relied entirely on ``record_id`` deduplication to avoid
+    double-counting evidence.
+    """
+    wal.stage(_staged_record("rec-good"))
+    wal.stage(_staged_record("rec-bad", schema_version=_UNREADABLE_SCHEMA_VERSION))
+
+    report = wal.replay(store)
+
+    assert report.appended_record_ids == ("rec-good",)
+    assert report.remaining == ("rec-bad",)
+    assert [item.record_id for item in wal.pending()] == ["rec-bad"]
+
+
+def test_quarantine_lets_the_records_behind_a_bad_one_drain(
+    store: InMemoryEvidenceStore, wal: InMemoryWriteAheadLog
+) -> None:
+    """The release valve: one un-appendable record must not cost the rest."""
+    wal.stage(_staged_record("rec-bad", schema_version=_UNREADABLE_SCHEMA_VERSION))
+    for index in range(_OUTAGE_RECORDS):
+        wal.stage(_staged_record(f"rec-{index}"))
+
+    blocked = wal.replay(store)
+    assert blocked.failed_record_id == "rec-bad"
+    assert len(store) == 0
+
+    quarantined = wal.quarantine("rec-bad")
+    assert quarantined is not None
+    assert quarantined.record_id == "rec-bad"
+
+    report = wal.replay(store)
+
+    assert report.ok
+    assert report.appended_record_ids == tuple(
+        f"rec-{index}" for index in range(_OUTAGE_RECORDS)
+    )
+    assert len(store) == _OUTAGE_RECORDS
+    assert store.verify(_TENANT_A).ok
+    assert wal.pending() == ()
+
+
+def test_a_quarantined_record_is_kept_not_deleted(wal: InMemoryWriteAheadLog) -> None:
+    """Quarantine is not a delete: the evidence never became durable (ADR-0006)."""
+    wal.stage(_staged_record("rec-bad", schema_version=_UNREADABLE_SCHEMA_VERSION))
+
+    wal.quarantine("rec-bad")
+
+    assert [item.record_id for item in wal.quarantined()] == ["rec-bad"]
+    assert wal.pending() == ()
+    # Still held by this log, so a backlog gauge cannot read empty.
+    assert len(wal) == 1
+
+
+def test_quarantining_an_unknown_record_reports_nothing(wal: InMemoryWriteAheadLog) -> None:
+    assert wal.quarantine("rec-absent") is None
+
+
+def test_a_quarantined_record_cannot_be_re_staged_into_the_queue(
+    wal: InMemoryWriteAheadLog,
+) -> None:
+    """Otherwise the same un-appendable record wedges the log a second time."""
+    staged = wal.stage(_staged_record("rec-bad", schema_version=_UNREADABLE_SCHEMA_VERSION))
+    wal.quarantine("rec-bad")
+
+    again = wal.stage(_staged_record("rec-bad", schema_version=_UNREADABLE_SCHEMA_VERSION))
+
+    assert again == staged
+    assert wal.pending() == ()
+    assert len(wal.quarantined()) == 1
+
+
+def test_quarantined_records_still_count_against_the_bound(clock: FrozenClock) -> None:
+    """Setting a record aside unblocks replay; it does not shrink the backlog."""
+    small = InMemoryWriteAheadLog(clock=clock, max_pending=2)
+    small.stage(_staged_record("rec-bad", schema_version=_UNREADABLE_SCHEMA_VERSION))
+    small.stage(_staged_record("rec-1"))
+    small.quarantine("rec-bad")
+
+    with pytest.raises(WriteAheadLogFullError):
+        small.stage(_staged_record("rec-2"))
+
+
+def test_discard_can_clear_a_quarantined_record(wal: InMemoryWriteAheadLog) -> None:
+    """Accepting the loss is a separate, named decision."""
+    wal.stage(_staged_record("rec-bad", schema_version=_UNREADABLE_SCHEMA_VERSION))
+    wal.quarantine("rec-bad")
+
+    assert wal.discard("rec-bad") is True
+    assert wal.quarantined() == ()
+    assert len(wal) == 0
+
+
+def test_discard_all_clears_quarantined_records_too(wal: InMemoryWriteAheadLog) -> None:
+    wal.stage(_staged_record("rec-bad", schema_version=_UNREADABLE_SCHEMA_VERSION))
+    wal.stage(_staged_record("rec-1"))
+    wal.quarantine("rec-bad")
+
+    assert wal.discard_all() == 2
+    assert len(wal) == 0
+
+
 # --- discarding ---------------------------------------------------------------
 
 
@@ -349,6 +528,7 @@ def test_discard_all_empties_the_log(wal: InMemoryWriteAheadLog) -> None:
 # --- the outage path end to end ------------------------------------------------
 
 
+@pytest.mark.mutation
 def test_outage_then_recovery_restores_every_refused_decision(
     store: InMemoryEvidenceStore,
     wal: InMemoryWriteAheadLog,
