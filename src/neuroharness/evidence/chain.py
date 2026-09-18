@@ -67,6 +67,7 @@ __all__ = [
     "CHECKPOINT_SIGNING_DOMAIN",
     "compute_record_hash",
     "verify_chain",
+    "verify_against_checkpoint",
     "create_checkpoint",
     "verify_checkpoint",
     "checkpoint_signing_bytes",
@@ -163,6 +164,17 @@ class ChainBreak(str, Enum):
     TENANT_MISMATCH = "tenant_mismatch"
     #: A record is missing the fields that make its position checkable.
     MALFORMED_RECORD = "malformed_record"
+    #: The chain is shorter than a signed checkpoint says it was. This is the
+    #: one tamper hash chaining cannot see on its own: drop the last N records
+    #: and every remaining link is still perfect, because a chain commits to
+    #: what precedes each record and to nothing that follows it.
+    TRUNCATED = "truncated"
+    #: The chain reaches the checkpointed sequence but the record there is not
+    #: the record that was signed: the history was rewritten, not merely cut.
+    CHECKPOINT_MISMATCH = "checkpoint_mismatch"
+    #: The checkpoint itself does not verify, so it attests to nothing and
+    #: cannot be used to judge the chain.
+    CHECKPOINT_INVALID = "checkpoint_invalid"
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,6 +472,90 @@ def verify_checkpoint(
         return bool(verifier(payload, signature))
     assert signer is not None  # narrowed by the exactly-one check above
     return hmac.compare_digest(signer(payload), signature)
+
+
+def verify_against_checkpoint(
+    records: Sequence[Mapping[str, Any]],
+    checkpoint: Mapping[str, Any],
+    *,
+    tenant_id: str,
+    signer: Signer | None = None,
+    verifier: Callable[[bytes, str], bool] | None = None,
+) -> ChainVerification:
+    """Verify a run of records against a signed checkpoint (``SEC-10``).
+
+    Truncation is the one tamper a hash chain cannot see. Each record commits to
+    what precedes it and to nothing that follows, so deleting the last N records
+    leaves every remaining link perfect: :func:`verify_chain` returns ``ok`` for
+    a chain that has had its most recent — and, during an incident, its most
+    interesting — decisions removed. The signed checkpoint is the external
+    statement of how far the chain had got, and this is the function that
+    compares the two. Without it the checkpoint is a value that is produced,
+    stored and never read, which is indistinguishable from not having one.
+
+    Checked in this order, because each step makes the next meaningful:
+
+    1. the checkpoint's own signature, since an unverified checkpoint attests to
+       nothing and must not be used to accuse a chain;
+    2. the chain's internal consistency, so that a rewritten record is reported
+       as a rewrite rather than as whatever the comparison below would make of
+       it;
+    3. that the run reaches the checkpointed sequence — if it stops short, the
+       records the checkpoint attests to are gone;
+    4. that the record at that sequence is the record that was signed.
+
+    Records *after* the checkpointed sequence are expected and ignored: a chain
+    that has grown since its last checkpoint is the normal case.
+
+    ``records`` must include the checkpointed sequence. A run that begins after
+    it is reported as :attr:`ChainBreak.TRUNCATED`, because this function cannot
+    distinguish a deliberately partial read from a deletion, and treating an
+    unverifiable presentation as verified is the one answer that must never be
+    given (Constitution Art. II).
+
+    ``first_broken_index`` is a record index where one applies; it is
+    ``len(records)`` when the fault is past the end of the run or is the
+    checkpoint itself, which is where a missing record would have been.
+    """
+    if not verify_checkpoint(checkpoint, tenant_id=tenant_id, signer=signer, verifier=verifier):
+        return ChainVerification.broken(
+            len(records),
+            ChainBreak.CHECKPOINT_INVALID,
+            "the checkpoint signature does not verify, so it attests to nothing",
+        )
+
+    chain = verify_chain(records, expected_tenant_id=tenant_id)
+    if not chain.ok:
+        return chain
+
+    checkpointed_seq = int(checkpoint[_CHECKPOINT_FIELD_LAST_SEQ])
+    checkpointed_hash = str(checkpoint[_CHECKPOINT_FIELD_LAST_RECORD_HASH])
+
+    position = next(
+        (
+            index
+            for index, record in enumerate(records)
+            if int(record[FIELD_SEQ]) == checkpointed_seq
+        ),
+        None,
+    )
+    if position is None:
+        return ChainVerification.broken(
+            len(records),
+            ChainBreak.TRUNCATED,
+            f"the checkpoint attests to seq {checkpointed_seq}, which is not in the "
+            f"{len(records)} record(s) presented",
+        )
+
+    stored_hash = str(records[position][FIELD_RECORD_HASH])
+    if not hmac.compare_digest(stored_hash, checkpointed_hash):
+        return ChainVerification.broken(
+            position,
+            ChainBreak.CHECKPOINT_MISMATCH,
+            f"the record at seq {checkpointed_seq} is not the one the checkpoint signed",
+        )
+
+    return ChainVerification.verified(len(records))
 
 
 def _check_structure(record: Mapping[str, Any]) -> str | None:

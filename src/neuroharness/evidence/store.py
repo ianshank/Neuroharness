@@ -33,7 +33,16 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Iterator, Mapping, Protocol, Sequence, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Iterator,
+    Mapping,
+    Protocol,
+    Sequence,
+    runtime_checkable,
+)
 
 from neuroharness.errors import EvidenceUnavailableError, FailClosedError
 from neuroharness.evidence.chain import (
@@ -55,6 +64,7 @@ from neuroharness.evidence.chain import (
     compute_record_hash,
     create_checkpoint,
     plain_value,
+    verify_against_checkpoint,
     verify_chain,
 )
 from neuroharness.models.common import Digest
@@ -339,6 +349,34 @@ class InMemoryEvidenceStore:
         """Verify this tenant's chain as stored (``SEC-10``)."""
         return verify_chain(
             self.read(tenant_id, start_seq=start_seq), expected_tenant_id=str(tenant_id)
+        )
+
+    def verify_against_checkpoint(
+        self,
+        tenant_id: str,
+        checkpoint: Mapping[str, Any],
+        *,
+        signer: Signer | None = None,
+        verifier: Callable[[bytes, str], bool] | None = None,
+    ) -> ChainVerification:
+        """Verify this tenant's chain against a checkpoint signed earlier (``SEC-10``).
+
+        :meth:`verify` proves the chain is internally consistent, which a
+        truncated chain also is: every record commits to what precedes it and to
+        nothing that follows. This is the check that notices records are
+        missing from the end, and it is the reason :meth:`checkpoint` produces a
+        value worth storing.
+
+        Always reads from :data:`GENESIS_SEQ`: a partial read cannot be
+        distinguished from a deletion, so verifying one against a checkpoint
+        would report a healthy store as tampered with.
+        """
+        return verify_against_checkpoint(
+            self.read(str(tenant_id)),
+            checkpoint,
+            tenant_id=str(tenant_id),
+            signer=signer,
+            verifier=verifier,
         )
 
     def checkpoint(

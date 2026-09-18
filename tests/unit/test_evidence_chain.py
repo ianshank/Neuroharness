@@ -19,15 +19,18 @@ from neuroharness.errors import ConfigurationError
 from neuroharness.evidence.chain import (
     GENESIS_SEQ,
     SCHEMA_VERSION,
+    CHECKPOINT_SIGNING_DOMAIN,
     ChainBreak,
     MalformedRecordError,
     RecordKind,
     checkpoint_signing_bytes,
     compute_record_hash,
     create_checkpoint,
+    verify_against_checkpoint,
     verify_chain,
     verify_checkpoint,
 )
+from neuroharness.canonical.digest import digest_value
 from neuroharness.models.common import Digest
 from neuroharness.seams import FrozenClock
 
@@ -54,11 +57,16 @@ def _build_chain(
     *,
     clock: FrozenClock,
     start_seq: int = GENESIS_SEQ,
+    trace_id: str = _TRACE_ID,
 ) -> list[dict[str, Any]]:
     """Build a well-formed chain without going through the store.
 
     The chain tests must fail when the chain primitives are wrong, not when the
     store is wrong, so they build their own records.
+
+    ``trace_id`` varies the content so that a second call produces a chain that
+    is internally perfect and *different* -- the rewrite an attacker with the
+    whole store can perform, as opposed to an edit that breaks a link.
     """
     records: list[dict[str, Any]] = []
     previous: Digest | None = None
@@ -71,7 +79,7 @@ def _build_chain(
             "prev_record_hash": str(previous) if previous is not None else None,
             "kind": RecordKind.EVALUATION.value,
             "timestamp": clock.now().isoformat(),
-            "trace_id": _TRACE_ID,
+            "trace_id": trace_id,
             "evaluation": {"verdict": "ALLOW", "reason_codes": []},
         }
         record_hash = compute_record_hash(record, prev_hash=previous)
@@ -241,21 +249,155 @@ def test_deleting_a_middle_record_is_detected(clock: FrozenClock) -> None:
     assert result.reason is ChainBreak.SEQUENCE_GAP
 
 
-def test_deleting_the_last_record_is_detected_by_the_checkpoint(clock: FrozenClock) -> None:
-    """Truncation is invisible to the chain alone; the signed head is what catches it."""
-    records = _build_chain("acme", _CHAIN_LENGTH, clock=clock)
-    checkpoint = create_checkpoint(
+def _checkpoint_at(records: list[dict[str, Any]], index: int = -1) -> dict[str, Any]:
+    """Sign the head of ``records`` as it stands."""
+    return create_checkpoint(
         tenant_id="acme",
-        last_seq=int(records[-1]["seq"]),
-        last_record_hash=Digest(records[-1]["record_hash"]),
+        last_seq=int(records[index]["seq"]),
+        last_record_hash=Digest(records[index]["record_hash"]),
         key_id=_KEY_ID,
         signer=_hmac_signer,
     )
-    truncated = records[:-1]
 
-    assert verify_chain(truncated, expected_tenant_id="acme").ok
-    assert verify_checkpoint(checkpoint, tenant_id="acme", signer=_hmac_signer)
-    assert int(truncated[-1]["seq"]) != checkpoint["last_seq"]
+
+def test_deleting_the_last_record_is_invisible_to_the_chain_alone(
+    clock: FrozenClock,
+) -> None:
+    """The premise of the checkpoint, stated as the thing it has to defeat.
+
+    Every record commits to what precedes it and to nothing that follows, so a
+    truncated chain is internally perfect. This is why ``SEC-10`` exists, and it
+    is worth asserting: if ``verify_chain`` ever *did* catch a truncation, the
+    checkpoint machinery below would be solving a problem that had moved.
+    """
+    records = _build_chain("acme", _CHAIN_LENGTH, clock=clock)
+
+    assert verify_chain(records[:-1], expected_tenant_id="acme").ok
+
+
+def test_deleting_the_last_record_is_detected_against_the_checkpoint(
+    clock: FrozenClock,
+) -> None:
+    """``SEC-10``: the signed head is what turns a perfect chain into a caught one.
+
+    The incident shape: someone with the store removes the most recent
+    decisions, which are the ones an investigation is about. The remaining
+    chain verifies, so the only thing that can contradict it is a statement
+    made before the deletion and signed with a key the store does not hold.
+    """
+    records = _build_chain("acme", _CHAIN_LENGTH, clock=clock)
+    checkpoint = _checkpoint_at(records)
+
+    result = verify_against_checkpoint(
+        records[:-1], checkpoint, tenant_id="acme", signer=_hmac_signer
+    )
+
+    assert not result.ok
+    assert result.reason is ChainBreak.TRUNCATED
+    assert result.first_broken_index == len(records) - 1
+    assert str(records[-1]["seq"]) in result.detail
+
+
+def test_an_intact_chain_verifies_against_its_checkpoint(clock: FrozenClock) -> None:
+    """The control: the check must accept the chain it was made from."""
+    records = _build_chain("acme", _CHAIN_LENGTH, clock=clock)
+
+    result = verify_against_checkpoint(
+        records, _checkpoint_at(records), tenant_id="acme", signer=_hmac_signer
+    )
+
+    assert result.ok
+    assert result.checked == len(records)
+
+
+def test_a_chain_that_has_grown_since_its_checkpoint_still_verifies(
+    clock: FrozenClock,
+) -> None:
+    """A checkpoint is a floor, not a ceiling; the normal case is a longer chain."""
+    records = _build_chain("acme", _CHAIN_LENGTH, clock=clock)
+    checkpoint = _checkpoint_at(records, index=1)
+
+    assert verify_against_checkpoint(
+        records, checkpoint, tenant_id="acme", signer=_hmac_signer
+    ).ok
+
+
+def test_rewriting_the_checkpointed_record_is_a_mismatch_not_a_truncation(
+    clock: FrozenClock,
+) -> None:
+    """A rewrite and a deletion start different investigations.
+
+    Here the chain is re-hashed end to end so it verifies on its own -- the
+    attacker had the whole store -- and only the checkpoint disagrees. Reporting
+    that as ``TRUNCATED`` would send an operator looking for records that were
+    never removed.
+    """
+    records = _build_chain("acme", _CHAIN_LENGTH, clock=clock)
+    checkpoint = _checkpoint_at(records)
+
+    rewritten = _build_chain("acme", _CHAIN_LENGTH, clock=clock, trace_id="1" * 32)
+    assert verify_chain(rewritten, expected_tenant_id="acme").ok
+
+    result = verify_against_checkpoint(
+        rewritten, checkpoint, tenant_id="acme", signer=_hmac_signer
+    )
+
+    assert not result.ok
+    assert result.reason is ChainBreak.CHECKPOINT_MISMATCH
+    assert result.first_broken_index == len(rewritten) - 1
+
+
+def test_an_unverifiable_checkpoint_accuses_nobody(clock: FrozenClock) -> None:
+    """A forged checkpoint must not be usable to discredit an intact chain.
+
+    Checking the signature first is what stops the checkpoint becoming an attack
+    of its own: anyone who could fabricate one could otherwise make a correct
+    store look tampered with, which is a denial of service against the audit
+    trail rather than against the harness.
+    """
+    records = _build_chain("acme", _CHAIN_LENGTH, clock=clock)
+    forged = dict(_checkpoint_at(records))
+    forged["signature"] = "bm90LWEtc2lnbmF0dXJl"
+
+    result = verify_against_checkpoint(
+        records, forged, tenant_id="acme", signer=_hmac_signer
+    )
+
+    assert not result.ok
+    assert result.reason is ChainBreak.CHECKPOINT_INVALID
+
+
+def test_a_checkpoint_from_another_tenant_does_not_verify_here(
+    clock: FrozenClock,
+) -> None:
+    """``NFR-15``: the tenant is inside the signed payload for exactly this."""
+    records = _build_chain("acme", _CHAIN_LENGTH, clock=clock)
+    checkpoint = _checkpoint_at(records)
+
+    result = verify_against_checkpoint(
+        records, checkpoint, tenant_id="other", signer=_hmac_signer
+    )
+
+    assert not result.ok
+    assert result.reason is ChainBreak.CHECKPOINT_INVALID
+
+
+def test_a_broken_chain_is_reported_as_broken_not_as_a_checkpoint_problem(
+    clock: FrozenClock,
+) -> None:
+    """The chain's own diagnosis survives: the checkpoint check adds, never replaces."""
+    records = _build_chain("acme", _CHAIN_LENGTH, clock=clock)
+    checkpoint = _checkpoint_at(records)
+    records[1] = copy.deepcopy(records[1])
+    records[1]["trace_id"] = "9" * 32
+
+    result = verify_against_checkpoint(
+        records, checkpoint, tenant_id="acme", signer=_hmac_signer
+    )
+
+    assert not result.ok
+    assert result.reason is ChainBreak.RECORD_HASH_MISMATCH
+    assert result.first_broken_index == 1
 
 
 def test_a_record_spliced_from_another_tenant_is_detected(clock: FrozenClock) -> None:
@@ -472,24 +614,69 @@ def test_verify_checkpoint_refuses_an_ambiguous_configuration() -> None:
         verify_checkpoint({}, tenant_id="acme", signer=_hmac_signer, verifier=lambda _p, _s: True)
 
 
-def test_checkpoint_signing_bytes_are_domain_separated() -> None:
-    """A signature over a checkpoint must not be reusable over anything else."""
-    payload = checkpoint_signing_bytes(
-        tenant_id="acme",
-        last_seq=1,
-        last_record_hash=Digest("sha256:" + "33" * 32),
-        key_id=_KEY_ID,
+def test_checkpoint_signing_bytes_carry_the_domain_separator() -> None:
+    """``SEC-10``: a checkpoint signature must not be reusable over anything else.
+
+    The previous version of this test compared two checkpoints that differed by
+    ``anchor_ref`` and then asserted the result was ``bytes``. It never
+    referenced the separator, so deleting ``"domain"`` from the signed payload
+    passed the entire suite -- the constant existed and nothing depended on it.
+
+    What the separator buys: without it, the signed bytes are a digest of an
+    ordinary object, and any other structure that canonicalised to the same
+    document would produce a signature presentable as a checkpoint. The
+    assertion is therefore that the bytes are *not* the bare digest of those
+    fields.
+    """
+    fields = {
+        "tenant_id": "acme",
+        "last_seq": 1,
+        "last_record_hash": Digest("sha256:" + "33" * 32),
+        "key_id": _KEY_ID,
+    }
+    payload = checkpoint_signing_bytes(**fields)
+
+    undomained = digest_value(
+        {
+            "tenant_id": fields["tenant_id"],
+            "last_seq": fields["last_seq"],
+            "last_record_hash": str(fields["last_record_hash"]),
+            "key_id": fields["key_id"],
+            "anchor_ref": None,
+        }
+    ).encode("utf-8")
+
+    assert payload != undomained, (
+        "the signed bytes are the digest of the checkpoint fields alone; the "
+        "domain separator is not in the payload (SEC-10)"
     )
-    other_domain = checkpoint_signing_bytes(
-        tenant_id="acme",
-        last_seq=1,
-        last_record_hash=Digest("sha256:" + "33" * 32),
-        key_id=_KEY_ID,
-        anchor_ref="anything",
+    assert CHECKPOINT_SIGNING_DOMAIN == "neuroharness/evidence-checkpoint/v1", (
+        "the separator is part of the signature format: changing it invalidates "
+        "every checkpoint ever signed, so it moves only with a version bump"
     )
 
-    assert payload != other_domain
-    assert isinstance(payload, bytes)
+
+def test_every_signed_field_changes_the_checkpoint_bytes() -> None:
+    """A field outside the signature is a field an attacker may edit freely."""
+    base = {
+        "tenant_id": "acme",
+        "last_seq": 1,
+        "last_record_hash": Digest("sha256:" + "33" * 32),
+        "key_id": _KEY_ID,
+        "anchor_ref": None,
+    }
+    payload = checkpoint_signing_bytes(**base)
+
+    for field, altered in (
+        ("tenant_id", "other"),
+        ("last_seq", 2),
+        ("last_record_hash", Digest("sha256:" + "44" * 32)),
+        ("key_id", "another-key"),
+        ("anchor_ref", "https://example.invalid/anchor"),
+    ):
+        assert checkpoint_signing_bytes(**{**base, field: altered}) != payload, (
+            f"{field} is not covered by the checkpoint signature"
+        )
 
 
 def test_create_checkpoint_rejects_a_sequence_below_genesis() -> None:

@@ -143,6 +143,16 @@ def _render_path(path: tuple[str, ...]) -> str:
 
     Errors from a canonicaliser are read by whoever has to fix the document, and
     "unsupported type" without a location is unactionable in a nested envelope.
+
+    The rendering is ASCII-only, and that is a fail-closed requirement rather
+    than a formatting preference. The values that reach this function are the
+    ones that had no canonical form, and the commonest reason is an unpaired
+    surrogate - which has no UTF-8 encoding at all. Interpolating such a key
+    verbatim produces a message that raises ``UnicodeEncodeError`` the moment
+    anything tries to write it, so the clean refusal this module is raising
+    would be replaced, in the caller's logging path, by a crash carrying no
+    reason code (Constitution Art. II, ``NFR-18``). Escaping here keeps a
+    refusal a refusal.
     """
     if not path:
         return _ROOT_PATH_LABEL
@@ -150,7 +160,9 @@ def _render_path(path: tuple[str, ...]) -> str:
     for segment in path:
         for raw, escaped in _JSON_POINTER_ESCAPES:
             segment = segment.replace(raw, escaped)
-        parts.append(segment)
+        # ``ascii()`` quotes as well as escapes; the quotes are stripped so the
+        # pointer still reads as a pointer.
+        parts.append(segment if segment.isascii() else ascii(segment)[1:-1])
     return "/" + "/".join(parts)
 
 

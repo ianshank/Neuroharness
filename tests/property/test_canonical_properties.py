@@ -34,10 +34,12 @@ from hypothesis import strategies as st
 
 from neuroharness.canonical.digest import (
     SAFE_INTEGER_BOUND,
+    digest_bytes,
     digest_value,
     renders_as_unsafe_integer,
 )
 from neuroharness.canonical.jcs import canonical_string, canonicalize
+from neuroharness.errors import CanonicalizationError
 
 pytestmark = pytest.mark.property
 
@@ -60,9 +62,13 @@ DETERMINISM_RUNS = 100
 EXAMPLES = 50
 DETERMINISM_EXAMPLES = 20
 
+#: ``derandomize`` because ``.hypothesis/`` is not checked in: without it a
+#: failing example found in CI exists only in that run's database, and the
+#: report says "a property failed" with no way for anyone to reproduce it.
 _SETTINGS = settings(
     max_examples=EXAMPLES,
     deadline=None,
+    derandomize=True,
     suppress_health_check=[HealthCheck.too_slow],
 )
 
@@ -148,12 +154,6 @@ def test_canonicalisation_survives_a_parse(document: Any) -> None:
 
 
 @_SETTINGS
-@given(document=json_values())
-def test_canonical_output_is_parseable_json(document: Any) -> None:
-    json.loads(canonical_string(document))
-
-
-@_SETTINGS
 @given(document=json_objects(), seed=st.integers(min_value=0, max_value=2**32 - 1))
 def test_key_insertion_order_does_not_affect_output(document: dict[str, Any], seed: int) -> None:
     reordered = _reordered(document, random.Random(seed))
@@ -165,6 +165,7 @@ def test_key_insertion_order_does_not_affect_output(document: dict[str, Any], se
 @settings(
     max_examples=DETERMINISM_EXAMPLES,
     deadline=None,
+    derandomize=True,
     suppress_health_check=[HealthCheck.too_slow],
 )
 @given(document=json_values(), seed=st.integers(min_value=0, max_value=2**32 - 1))
@@ -177,15 +178,149 @@ def test_digest_value_is_deterministic(document: Any, seed: int) -> None:
 
 
 @_SETTINGS
-@given(left=json_values(), right=json_values())
-def test_digests_agree_exactly_when_canonical_forms_agree(left: Any, right: Any) -> None:
-    """No salt, no nonce, no context: the digest is a function of the bytes."""
-    assert (digest_value(left) == digest_value(right)) == (
-        canonicalize(left) == canonicalize(right)
-    )
+@given(document=json_values())
+def test_a_digest_is_the_digest_of_the_canonical_bytes_and_nothing_else(
+    document: Any,
+) -> None:
+    """No salt, no nonce, no domain tag: ``digest_value`` adds nothing.
+
+    This replaces a property asserting that two documents digest equally exactly
+    when their canonical forms are equal. That direction restated that
+    ``sha256 . canonicalize`` is a function, and its interesting half could only
+    fail on a SHA-256 collision, so it could not fail.
+
+    What can fail is this: the specification defines the digest as SHA-256 over
+    exactly the JCS bytes, and publishes test vectors that non-Python components
+    must reproduce. Prefixing a domain separator - a reasonable-looking hardening
+    change - would silently make every one of those vectors wrong, and the
+    symptom would appear as a cross-implementation token mismatch long after the
+    change.
+    """
+    assert digest_value(document) == digest_bytes(canonicalize(document))
+
+
+#: Every character RFC 8785 section 3.2.2.2 requires to be escaped rather than
+#: emitted. A raw one in the output is not JSON at all, and a parser that
+#: tolerated it would disagree with one that did not - which is a digest
+#: mismatch between two conforming implementations.
+_MUST_NOT_APPEAR_RAW = frozenset(range(0x20)) | {ord('"'), ord("\\")}
 
 
 @_SETTINGS
 @given(document=json_values())
-def test_canonical_string_and_bytes_are_the_same_document(document: Any) -> None:
-    assert canonicalize(document) == canonical_string(document).encode("utf-8")
+def test_no_control_character_is_ever_emitted_raw(document: Any) -> None:
+    """Replaces an assertion-free "it parses" property with one that can fail.
+
+    Generated strings carry newlines, tabs and ``NUL``. Emitting one raw would
+    also forge a line in the JSONL evidence export, which is the shape
+    ``SEC-07`` exists to close, so this is a security property and not a
+    formatting one.
+    """
+    text = canonical_string(document)
+    inside_string = False
+    escaped = False
+    for character in text:
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\" and inside_string:
+            escaped = True
+            continue
+        if character == '"':
+            inside_string = not inside_string
+            continue
+        assert ord(character) not in _MUST_NOT_APPEAR_RAW, (
+            f"{character!r} appears unescaped in {text!r}"
+        )
+
+
+#: Characters chosen so that code-point order and UTF-16 code-unit order
+#: *disagree*. A supplementary character encodes as a surrogate pair whose lead
+#: unit is in U+D800-U+DBFF, so it sorts below every character in
+#: U+E000-U+FFFF - the reverse of its code-point order. Left to a generic text
+#: strategy, the discriminating pair would essentially never be drawn, and the
+#: property would pass against a code-point implementation forever.
+_UTF16_DISCRIMINATING = st.sampled_from(
+    ["\uE000", "\uF8FF", "\uFFFD", "\U00010000", "\U0001F600", "\U0010FFFF", "a", "~"]
+)
+
+
+@_SETTINGS
+@given(
+    keys=st.lists(_UTF16_DISCRIMINATING, min_size=2, max_size=6, unique=True),
+)
+def test_supplementary_keys_sort_below_the_private_use_area(keys: list[str]) -> None:
+    """The case that separates UTF-16 order from code-point order (``FR-04``).
+
+    ``sorted()`` on ``str`` is code-point order and is the obvious thing to
+    write. For a key above U+FFFF it gives the wrong answer, so two
+    implementations - one following RFC 8785, one following Python's default -
+    would produce different bytes for the same document, and therefore different
+    digests, and therefore a token that does not verify.
+    """
+    document = {key: index for index, key in enumerate(keys)}
+    emitted = json.loads(canonical_string(document), object_pairs_hook=lambda p: [k for k, _ in p])
+
+    assert emitted == sorted(keys, key=lambda key: key.encode("utf-16-be"))
+
+
+@_SETTINGS
+@given(document=json_objects())
+def test_object_keys_are_sorted_by_utf16_code_unit(document: dict[str, Any]) -> None:
+    """RFC 8785 sorts keys as UTF-16 code units, not as code points.
+
+    The two orders differ for any key above U+FFFF, because a supplementary
+    character encodes as a surrogate pair whose lead unit sorts *below* U+E000.
+    Python's own ``sorted`` on ``str`` is code-point order, so the obvious
+    implementation is wrong for exactly the inputs nobody writes by hand - and
+    the unit tests pin it with two vectors. This pins it over whatever
+    Hypothesis produces, in the nesting the envelope actually has.
+    """
+    orders: list[list[str]] = []
+
+    def record_order(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        orders.append([key for key, _ in pairs])
+        return dict(pairs)
+
+    json.loads(canonical_string(document), object_pairs_hook=record_order)
+
+    assert orders, "the generated document had no object to check"
+    for keys in orders:
+        assert keys == sorted(keys, key=lambda key: key.encode("utf-16-be"))
+
+
+#: Lone surrogates: code points with no UTF-8 encoding at all. They reach a
+#: gateway through any decoder that accepts them, and they are the one string
+#: input with no canonical form.
+_LONE_SURROGATES = st.characters(min_codepoint=0xD800, max_codepoint=0xDFFF)
+
+
+@_SETTINGS
+@given(
+    surrogate=_LONE_SURROGATES,
+    prefix=st.text(max_size=GENERATED_MAX_SIZE),
+    suffix=st.text(max_size=GENERATED_MAX_SIZE),
+    in_key=st.booleans(),
+)
+def test_a_lone_surrogate_has_no_canonical_form(
+    surrogate: str, prefix: str, suffix: str, in_key: bool
+) -> None:
+    """Refused, in a key or a value, wherever in the string it sits.
+
+    The documented refusal was covered by two hand-written vectors. A string
+    that has no UTF-8 encoding must not be digested rather than being replaced,
+    stripped or passed through, because every one of those would give two
+    implementations different bytes for the same document.
+
+    The error must also be *renderable*: interpolating an unpaired surrogate
+    into the message verbatim produced text that raised ``UnicodeEncodeError``
+    the moment anything wrote it, turning a clean refusal into a crash with no
+    reason code (Constitution Art. II).
+    """
+    text = prefix + surrogate + suffix
+    document = {text: "value"} if in_key else {"key": text}
+
+    with pytest.raises(CanonicalizationError) as raised:
+        canonical_string(document)
+
+    str(raised.value).encode("utf-8")
