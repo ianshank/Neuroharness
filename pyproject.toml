@@ -18,8 +18,15 @@ dev = [
   "hypothesis>=6",
   "freezegun>=1.5",
   "jsonschema>=4.20",
-  "ruff>=0.6",
-  "mypy>=1.11",
+  # Upper-bounded on purpose, and not as version hygiene. These two are the
+  # *gate* in CI stage 1, and a linter minor release adds rules: `ruff>=0.6`
+  # meant the build could go red with no change to the tree, and did - RUF036
+  # arrived in 0.16 and fired on a type alias written months earlier. A gate
+  # whose rule set moves underneath it is not reproducible, which is the same
+  # property NFR-07 asks of a decision. Raise the bound deliberately, read the
+  # new rules, fix or ignore each with a reason.
+  "ruff>=0.16,<0.17",
+  "mypy>=1.11,<2",
 ]
 
 [tool.hatch.build.targets.wheel]

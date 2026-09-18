@@ -59,7 +59,7 @@ __all__ = [
 #: What this module accepts. Kept loose on the container types because values
 #: reach it from parsed JSON, from pydantic models and from test fixtures alike;
 #: the runtime check in :func:`_write` is the authority, not this alias.
-JSONScalar: TypeAlias = "None | bool | int | float | str"
+JSONScalar: TypeAlias = "bool | int | float | str | None"
 JSONValue: TypeAlias = "JSONScalar | Mapping[str, Any] | Sequence[Any]"
 
 #: Maximum nesting of objects and arrays. ``{"a": {"b": 1}}`` is depth two.
