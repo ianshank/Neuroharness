@@ -29,6 +29,52 @@ env:
   MIN_COVERAGE: "90"
 
 jobs:
+  # Stage 1 of the twelve in `06-delivery-and-governance.md` section 3. It was
+  # specified from the start and had never run: neither tool was declared in
+  # pyproject, neither was installed, and `mypy` had never been run on seven of
+  # the twelve packages. So the rule set the gate enforced was whatever the last
+  # person to type the command happened to choose.
+  #
+  # Both are clean at zero. That is not a coincidence about tidiness: enabling
+  # pydantic's mypy plugin took 48 errors to 4, and one of the four was a real
+  # defect the suite could not see - `ResourceKeyRegistry.validate` shadowing
+  # `BaseModel.validate`, same name, opposite meanings, no error at either end.
+  lint:
+    name: Lint and type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      # Configuration lives in `pyproject.toml`, not in these arguments: a gate
+      # whose rule set is spelled in a workflow file is a gate nobody can
+      # reproduce locally.
+      - name: ruff
+        run: python -m ruff check src tests
+
+      # No `ruff format --check` here yet, deliberately. It would reformat 50 of
+      # 85 files, and a diff that size landing alongside the increment's repairs
+      # would bury them in review - the opposite of what a gate is for. Adopting
+      # the formatter is its own change, on a quiet tree, and it belongs with
+      # the pre-commit rollout rather than here.
+      #
+      # `Regal` is the third tool governance section 3 names for this stage. It
+      # lints Rego, there is no `policy/` directory, and a linter with nothing to
+      # lint is a green check that proves nothing. It lands with `P1-15`.
+
+      # `python -m mypy`, not `mypy`: the plugin has to load from the same
+      # interpreter that has pydantic installed. Run any other way, every
+      # BaseModel subclass resolves to `Any` and the models carrying the wire
+      # contract become the part of the tree `--strict` checks least.
+      - name: mypy --strict
+        run: python -m mypy
+
   tests:
     name: Unit tests and coverage (${{ matrix.python-version }})
     runs-on: ubuntu-latest
