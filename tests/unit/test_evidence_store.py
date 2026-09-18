@@ -11,6 +11,7 @@ import json
 import threading
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
 
 import pytest
 
@@ -37,7 +38,7 @@ from neuroharness.evidence.store import (
 )
 from neuroharness.evidence.wal import InMemoryWriteAheadLog
 from neuroharness.reason import ReasonName
-from neuroharness.seams import FrozenClock, SequenceIdGenerator
+from neuroharness.seams import DeterministicUuidGenerator, FrozenClock
 from neuroharness import version as schema_version_module
 from neuroharness.version import SchemaCompatibility, SchemaKind
 
@@ -74,13 +75,25 @@ def clock() -> FrozenClock:
 
 
 @pytest.fixture()
-def ids() -> SequenceIdGenerator:
-    return SequenceIdGenerator("rec")
+def ids() -> DeterministicUuidGenerator:
+    """UUIDs: the record schema types every identifier as one (``FR-72``)."""
+    return DeterministicUuidGenerator()
 
 
 @pytest.fixture()
-def store(clock: FrozenClock, ids: SequenceIdGenerator) -> InMemoryEvidenceStore:
+def store(clock: FrozenClock, ids: DeterministicUuidGenerator) -> InMemoryEvidenceStore:
     return InMemoryEvidenceStore(clock=clock, id_generator=ids)
+
+
+#: Identifiers for the action a record describes. ``FR-72`` requires an
+#: evaluation record to link to one, and the schema types both as UUIDs, so a
+#: record without them is not a record the store may chain.
+_DECISION_ID = str(UUID(int=0xDEC))
+_ACTION_ID = str(UUID(int=0xAC))
+
+#: One identifier reused deliberately, to exercise the per-tenant scoping of
+#: record identity: two tenants are two chains and may mint the same id.
+_FIXED_RECORD_ID = str(UUID(int=0xF11ED))
 
 
 def _record(tenant_id: str = _TENANT_A, **overrides: Any) -> dict[str, Any]:
@@ -89,6 +102,8 @@ def _record(tenant_id: str = _TENANT_A, **overrides: Any) -> dict[str, Any]:
         "tenant_id": tenant_id,
         "kind": RecordKind.EVALUATION.value,
         "trace_id": _TRACE_ID,
+        "decision_id": _DECISION_ID,
+        "action_id": _ACTION_ID,
         "evaluation": {"verdict": "ALLOW", "reason_codes": []},
     }
     record.update(overrides)
@@ -140,7 +155,9 @@ def test_append_stamps_identity_and_time_through_the_seams(
 ) -> None:
     result = store.append(_record())
 
-    assert result.record_id == "rec-00000001"
+    assert result.record_id == str(UUID(int=1)), (
+        "the identifier comes from the injected seam, and the schema types it as a UUID"
+    )
     assert result.record["timestamp"] == _START.isoformat()
     assert result.record["schema_version"] == SCHEMA_VERSION
     clock.advance(60)
@@ -344,19 +361,19 @@ def test_a_stamped_timestamp_is_accepted_by_its_own_validation(
 
 def test_append_refuses_a_duplicate_record_id(store: InMemoryEvidenceStore) -> None:
     """``record_id`` is what makes replay idempotent; it must identify one record."""
-    store.append(_record(record_id="fixed-id"))
+    store.append(_record(record_id=_FIXED_RECORD_ID))
 
     with pytest.raises(DuplicateRecordError):
-        store.append(_record(record_id="fixed-id"))
+        store.append(_record(record_id=_FIXED_RECORD_ID))
     assert len(store) == 1
 
 
 def test_the_same_record_id_may_exist_in_two_tenants(store: InMemoryEvidenceStore) -> None:
-    store.append(_record(_TENANT_A, record_id="fixed-id"))
-    store.append(_record(_TENANT_B, record_id="fixed-id"))
+    store.append(_record(_TENANT_A, record_id=_FIXED_RECORD_ID))
+    store.append(_record(_TENANT_B, record_id=_FIXED_RECORD_ID))
 
-    assert store.has_record(_TENANT_A, "fixed-id")
-    assert store.has_record(_TENANT_B, "fixed-id")
+    assert store.has_record(_TENANT_A, _FIXED_RECORD_ID)
+    assert store.has_record(_TENANT_B, _FIXED_RECORD_ID)
 
 
 def test_update_and_delete_raise(store: InMemoryEvidenceStore) -> None:
@@ -523,7 +540,7 @@ def test_the_chain_is_intact_across_an_outage(store: InMemoryEvidenceStore) -> N
 
 
 def test_writer_appends_through_the_store(
-    store: InMemoryEvidenceStore, clock: FrozenClock, ids: SequenceIdGenerator
+    store: InMemoryEvidenceStore, clock: FrozenClock, ids: DeterministicUuidGenerator
 ) -> None:
     writer = EvidenceWriter(store, clock=clock, id_generator=ids)
 
@@ -534,7 +551,7 @@ def test_writer_appends_through_the_store(
 
 
 def test_writer_stages_to_the_wal_on_an_outage_and_re_raises(
-    store: InMemoryEvidenceStore, clock: FrozenClock, ids: SequenceIdGenerator
+    store: InMemoryEvidenceStore, clock: FrozenClock, ids: DeterministicUuidGenerator
 ) -> None:
     """Re-raising is the control: a swallowed failure would let a token be issued."""
     wal = InMemoryWriteAheadLog(clock=clock)
@@ -552,7 +569,7 @@ def test_writer_stages_to_the_wal_on_an_outage_and_re_raises(
 
 
 def test_writer_without_a_wal_still_fails_closed(
-    store: InMemoryEvidenceStore, clock: FrozenClock, ids: SequenceIdGenerator
+    store: InMemoryEvidenceStore, clock: FrozenClock, ids: DeterministicUuidGenerator
 ) -> None:
     writer = EvidenceWriter(store, clock=clock, id_generator=ids)
     store.set_available(False)
@@ -563,7 +580,7 @@ def test_writer_without_a_wal_still_fails_closed(
 
 
 def test_writer_recovery_replays_the_staged_record_with_its_original_time(
-    store: InMemoryEvidenceStore, clock: FrozenClock, ids: SequenceIdGenerator
+    store: InMemoryEvidenceStore, clock: FrozenClock, ids: DeterministicUuidGenerator
 ) -> None:
     """The record must say when the decision happened, not when the store came back."""
     wal = InMemoryWriteAheadLog(clock=clock)
@@ -586,7 +603,7 @@ def test_writer_recovery_replays_the_staged_record_with_its_original_time(
 
 
 def test_writer_does_not_stage_a_malformed_record(
-    store: InMemoryEvidenceStore, clock: FrozenClock, ids: SequenceIdGenerator
+    store: InMemoryEvidenceStore, clock: FrozenClock, ids: DeterministicUuidGenerator
 ) -> None:
     """A record the store would never accept is a bug to surface, not to retry."""
     wal = InMemoryWriteAheadLog(clock=clock)
@@ -654,10 +671,74 @@ def test_availability_is_readable(store: InMemoryEvidenceStore) -> None:
 
 
 def test_writer_exposes_what_it_writes_through(
-    store: InMemoryEvidenceStore, clock: FrozenClock, ids: SequenceIdGenerator
+    store: InMemoryEvidenceStore, clock: FrozenClock, ids: DeterministicUuidGenerator
 ) -> None:
     wal = InMemoryWriteAheadLog(clock=clock)
     writer = EvidenceWriter(store, clock=clock, id_generator=ids, wal=wal)
 
     assert writer.store is store
     assert writer.wal is wal
+
+
+# --- FR-72: identity and links are the store's to check ----------------------
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("record_id", "not-a-uuid"),
+        ("decision_id", "dec-1"),
+        ("action_id", "act-1"),
+        ("trace_id", "not-a-trace-id"),
+    ],
+)
+def test_an_identifier_the_schema_rejects_never_reaches_the_chain(
+    store: InMemoryEvidenceStore, field: str, value: str
+) -> None:
+    """A hash chain makes a malformed record malformed for as long as it is kept.
+
+    The store used to accept any non-empty string here, so a deployment wired to
+    a non-UUID identifier seam chained records the published schema rejects --
+    permanently, and discovered by whoever later tried to read the evidence
+    rather than by whoever wrote it.
+    """
+    with pytest.raises(MalformedRecordError, match="FR-72"):
+        store.append(_record(**{field: value}))
+    assert len(store) == 0
+
+
+@pytest.mark.parametrize("missing", ["decision_id", "action_id"])
+def test_a_record_about_an_action_must_link_to_it(
+    store: InMemoryEvidenceStore, missing: str
+) -> None:
+    """``FR-72``: evidence that cannot be joined to its action explains nothing.
+
+    An evaluation record with no ``decision_id`` records that *a* decision
+    happened. Reconstructing what the harness did for one action means joining
+    the evaluation to its token, its approval and its receipt, and the link is
+    what makes that join possible.
+    """
+    record = _record()
+    del record[missing]
+
+    with pytest.raises(MalformedRecordError, match=missing):
+        store.append(record)
+    assert len(store) == 0
+
+
+def test_an_override_record_needs_no_action_link(store: InMemoryEvidenceStore) -> None:
+    """The rule is per kind: an override is about the harness, not one action.
+
+    A check that demanded the link from every kind would make the operational
+    record kinds unwritable, which is the failure mode of tightening a rule one
+    notch past what the schema says.
+    """
+    result = store.append(
+        {
+            "tenant_id": _TENANT_A,
+            "kind": RecordKind.OVERRIDE.value,
+            "trace_id": _TRACE_ID,
+            "override": {"kind": "halt_class"},
+        }
+    )
+    assert result.seq == GENESIS_SEQ

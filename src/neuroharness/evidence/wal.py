@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from typing import Any, Final, Mapping, Protocol, Sequence, runtime_checkable
 
 from neuroharness.errors import EvidenceUnavailableError, FailClosedError
+from neuroharness.models.common import freeze_document
 from neuroharness.evidence.chain import (
     FIELD_KIND,
     FIELD_RECORD_ID,
@@ -58,6 +59,7 @@ __all__ = [
     "StagedRecord",
     "ReplayReport",
     "WriteAheadLogFullError",
+    "AmbiguousRecordError",
     "WriteAheadLog",
     "InMemoryWriteAheadLog",
 ]
@@ -85,12 +87,34 @@ class WriteAheadLogFullError(EvidenceUnavailableError):
 
 @dataclass(frozen=True, slots=True)
 class StagedRecord:
-    """A record waiting to be written, with the moment it was staged."""
+    """A record waiting to be written, with the moment it was staged.
+
+    ``record`` is deeply read-only. ``frozen=True`` stops the field being
+    reassigned and nothing more, so while the payload was a plain ``dict`` a
+    caller holding a :meth:`InMemoryWriteAheadLog.pending` result could edit a
+    staged record in place -- and the log would then replay, and the chain would
+    hash, something other than the decision that was refused. A write-ahead log
+    whose contents can be edited before replay is not a record of what happened
+    (Constitution Art. IV).
+    """
 
     record_id: str
     tenant_id: str
     staged_at: str
     record: Mapping[str, Any]
+
+    @property
+    def key(self) -> tuple[str, str]:
+        """Identity within the log: the tenant *and* the record id.
+
+        ``record_id`` alone is not an identity. The evidence store scopes it per
+        tenant -- two tenants are two chains, and nothing stops them minting the
+        same identifier -- so a log that deduplicated on the bare id treated
+        tenant B's record as a retry of tenant A's and dropped B's evidence
+        entirely, silently, at the moment the store was already unavailable
+        (``NFR-15``).
+        """
+        return (self.tenant_id, self.record_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,17 +171,37 @@ class WriteAheadLog(Protocol):
         """
         ...
 
-    def quarantine(self, record_id: str) -> StagedRecord | None:
-        """Move one staged record aside so the queue behind it can drain."""
+    def quarantine(self, record_id: str, *, tenant_id: str | None = None) -> StagedRecord | None:
+        """Move one staged record aside so the queue behind it can drain.
+
+        ``tenant_id`` disambiguates when two tenants staged the same
+        ``record_id``; an implementation must refuse to choose rather than
+        quarantine the wrong tenant's evidence.
+        """
         ...
 
     def quarantined(self) -> Sequence[StagedRecord]:
         """Return the quarantined records, oldest first."""
         ...
 
-    def discard(self, record_id: str) -> bool:
-        """Drop one staged record without appending it. True if it was there."""
+    def discard(self, record_id: str, *, tenant_id: str | None = None) -> bool:
+        """Drop one staged record without appending it. True if it was there.
+
+        ``tenant_id`` disambiguates as it does for :meth:`quarantine`, and for
+        the sharper reason: this one deletes.
+        """
         ...
+
+
+class AmbiguousRecordError(MalformedRecordError):
+    """One ``record_id`` names staged records in more than one tenant's chain.
+
+    Raised rather than resolved. Quarantining or discarding is an operator
+    decision about one piece of evidence, and picking a tenant for them would
+    make that decision on their behalf -- silently setting aside, or deleting,
+    another tenant's record. Naming the tenant is one extra argument; guessing
+    wrong is an audit trail with a hole in it (``NFR-15``, ADR-0006).
+    """
 
 
 class InMemoryWriteAheadLog:
@@ -208,14 +252,15 @@ class InMemoryWriteAheadLog:
             record_id=record_id,
             tenant_id=tenant_id,
             staged_at=self._clock.now().isoformat(),
-            record=plain_value(record),
+            record=freeze_document(plain_value(record)),
         )
         with self._lock:
+            key = (tenant_id, record_id)
             already = next(
                 (
                     item
                     for item in (*self._pending, *self._quarantined)
-                    if item.record_id == record_id
+                    if item.key == key
                 ),
                 None,
             )
@@ -282,19 +327,19 @@ class InMemoryWriteAheadLog:
         duplicates: list[str] = []
         failed_record_id: str | None = None
         failure_reason_code: ReasonCode | None = None
-        written: set[str] = set()
+        written: set[tuple[str, str]] = set()
 
         for staged in queue:
             try:
                 if store.has_record(staged.tenant_id, staged.record_id):
                     # Already durable: a crash between the append and the discard.
                     duplicates.append(staged.record_id)
-                    written.add(staged.record_id)
+                    written.add(staged.key)
                     continue
                 appended.append(store.append(staged.record))
             except DuplicateRecordError:
                 duplicates.append(staged.record_id)
-                written.add(staged.record_id)
+                written.add(staged.key)
                 continue
             except FailClosedError as exc:
                 failed_record_id = staged.record_id
@@ -307,10 +352,10 @@ class InMemoryWriteAheadLog:
                     appended=len(appended),
                 )
                 break
-            written.add(staged.record_id)
+            written.add(staged.key)
 
         with self._lock:
-            self._pending = [item for item in self._pending if item.record_id not in written]
+            self._pending = [item for item in self._pending if item.key not in written]
             remaining = tuple(item.record_id for item in self._pending)
 
         report = ReplayReport(
@@ -331,7 +376,30 @@ class InMemoryWriteAheadLog:
         )
         return report
 
-    def quarantine(self, record_id: str) -> StagedRecord | None:
+    def _locate(
+        self, records: list[StagedRecord], record_id: str, tenant_id: str | None
+    ) -> StagedRecord | None:
+        """Find one staged record by id, refusing to choose between tenants.
+
+        ``tenant_id`` is optional because a single-tenant deployment has no
+        ambiguity to resolve and should not be made to carry the argument. When
+        it is omitted and the id is ambiguous, this raises rather than returning
+        the first match: see :class:`AmbiguousRecordError`.
+        """
+        matches = [item for item in records if item.record_id == record_id]
+        if tenant_id is not None:
+            matches = [item for item in matches if item.tenant_id == tenant_id]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise AmbiguousRecordError(
+                f"record_id {record_id!r} is staged for tenants "
+                + ", ".join(sorted(repr(item.tenant_id) for item in matches))
+                + "; name the tenant"
+            )
+        return matches[0]
+
+    def quarantine(self, record_id: str, *, tenant_id: str | None = None) -> StagedRecord | None:
         """Move one staged record out of the replay queue. ``None`` if absent.
 
         This is the release valve for a record the store will never accept: a
@@ -349,10 +417,10 @@ class InMemoryWriteAheadLog:
         """
         wanted = str(record_id)
         with self._lock:
-            staged = next((item for item in self._pending if item.record_id == wanted), None)
+            staged = self._locate(self._pending, wanted, tenant_id)
             if staged is None:
                 return None
-            self._pending = [item for item in self._pending if item.record_id != wanted]
+            self._pending = [item for item in self._pending if item.key != staged.key]
             self._quarantined.append(staged)
             held = len(self._quarantined)
         _LOG.error(
@@ -369,7 +437,7 @@ class InMemoryWriteAheadLog:
         with self._lock:
             return tuple(self._quarantined)
 
-    def discard(self, record_id: str) -> bool:
+    def discard(self, record_id: str, *, tenant_id: str | None = None) -> bool:
         """Drop one staged or quarantined record without appending it.
 
         Used when a record is known to be durable by another route, or when an
@@ -379,16 +447,19 @@ class InMemoryWriteAheadLog:
         """
         wanted = str(record_id)
         with self._lock:
-            pending = [item for item in self._pending if item.record_id != wanted]
-            quarantined = [item for item in self._quarantined if item.record_id != wanted]
-            found = len(pending) != len(self._pending) or len(quarantined) != len(
-                self._quarantined
+            staged = self._locate(
+                [*self._pending, *self._quarantined], wanted, tenant_id
             )
-            self._pending = pending
-            self._quarantined = quarantined
-        if found:
-            _LOG.debug("evidence.wal.discard", record_id=wanted)
-        return found
+            if staged is None:
+                return False
+            self._pending = [item for item in self._pending if item.key != staged.key]
+            self._quarantined = [
+                item for item in self._quarantined if item.key != staged.key
+            ]
+        _LOG.debug(
+            "evidence.wal.discard", tenant_id=staged.tenant_id, record_id=wanted
+        )
+        return True
 
     def discard_all(self) -> int:
         """Drop every staged and quarantined record and return how many."""

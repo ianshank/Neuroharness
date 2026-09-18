@@ -20,7 +20,7 @@ single subsystem alone:
     non-escalating infrastructure reason, no token is issued whatever the mode,
     so nothing can execute on an evaluation the harness could not complete.
 
-The pipeline owns the *order*, and it owns one thing more: every record it
+The pipeline owns the *order*, and it owns one thing more: every payload it
 writes is constructed through the typed models in
 :mod:`neuroharness.models.record` and therefore validated against
 ``docs/sdd/schemas/decision-record.schema.json`` **before** it is hash-chained.
@@ -30,6 +30,17 @@ malformed for as long as the chain is retained, and the failure surfaces at the
 auditor rather than at the writer. Constitution Article IV says evidence is a
 byproduct of enforcement; evidence that does not parse is not evidence, so the
 validation failure is a fail-closed condition (Article II) rather than a warning.
+
+The *payload* is the word that matters, and an earlier version of this paragraph
+overstated it. A record has two halves and they have different owners: the
+payload block is the pipeline's, and the identity and link fields --
+``record_id``, ``decision_id``, ``action_id``, ``trace_id`` -- are the store's,
+because it is the store that assigns and chains them
+(:func:`~neuroharness.evidence.store.prepare_record`, ``FR-72``). While only
+this half was checked, a deployment wired to a non-UUID identifier seam produced
+a perfectly valid ``evaluation`` block inside a record the published schema
+rejects. Between them the two checks now cover every field except the chain
+positions the store computes, which cannot be validated before they exist.
 
 What the record *says* is still the caller's business - the gateway knows the
 envelope reference, the critic timings and the fact freshness, and this module

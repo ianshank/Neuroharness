@@ -32,6 +32,7 @@ import json
 import threading
 from dataclasses import dataclass
 from datetime import datetime
+from uuid import UUID
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -43,6 +44,8 @@ from typing import (
     Sequence,
     runtime_checkable,
 )
+
+from pydantic import ValidationError
 
 from neuroharness.errors import EvidenceUnavailableError, FailClosedError
 from neuroharness.evidence.chain import (
@@ -67,7 +70,9 @@ from neuroharness.evidence.chain import (
     verify_against_checkpoint,
     verify_chain,
 )
-from neuroharness.models.common import Digest
+from neuroharness.models.common import Digest, freeze_document
+from neuroharness.models.envelope import TraceId, WireModel
+from neuroharness.models.record import RECORD_KINDS_REQUIRING_DECISION_LINK
 from neuroharness.observability.logging import get_logger
 from neuroharness.reason import ReasonName
 from neuroharness.seams import Clock, IdGenerator
@@ -346,9 +351,24 @@ class InMemoryEvidenceStore:
     # --- integrity -----------------------------------------------------------
 
     def verify(self, tenant_id: str, *, start_seq: int = GENESIS_SEQ) -> ChainVerification:
-        """Verify this tenant's chain as stored (``SEC-10``)."""
+        """Verify this tenant's chain as stored (``SEC-10``).
+
+        The default reads from :data:`GENESIS_SEQ`, which is the whole chain, so
+        the run is anchored: the first record must be the genesis record. A
+        caller that asks for a later ``start_seq`` has said it wants part of the
+        chain, and its run is not anchored, because the predecessor of its first
+        record is legitimately absent.
+
+        The distinction is the whole control. Without it, deleting the first
+        three records of a tenant's chain left a run whose every link still
+        verified, and this method called it healthy -- prefix truncation being
+        exactly as invisible to a hash chain as the tail truncation
+        :meth:`verify_against_checkpoint` exists to catch.
+        """
         return verify_chain(
-            self.read(tenant_id, start_seq=start_seq), expected_tenant_id=str(tenant_id)
+            self.read(tenant_id, start_seq=start_seq),
+            expected_tenant_id=str(tenant_id),
+            expect_genesis=start_seq == GENESIS_SEQ,
         )
 
     def verify_against_checkpoint(
@@ -482,6 +502,62 @@ class EvidenceWriter:
         return self._wal.replay(self._store)
 
 
+class _RecordLinks(WireModel):
+    """The identity and link fields of a decision record (``FR-72``).
+
+    A narrow model over the outer fields only, because the store cannot validate
+    a whole :class:`~neuroharness.models.record.DecisionRecord`: ``seq``,
+    ``prev_record_hash`` and ``record_hash`` do not exist yet at the point the
+    record is prepared, and ``record_hash`` cannot commit to itself.
+
+    Its types are imported from the record model rather than restated, so there
+    is one definition of what a ``record_id`` is. Without this check the store
+    accepted any non-empty string, so a deployment wired to a non-UUID identifier
+    seam hash-chained records the published schema rejects -- permanently, and
+    discovered at the auditor. The payload is the caller's to validate; these
+    fields are the store's, because they are what makes the record findable at
+    all.
+    """
+
+    record_id: UUID
+    trace_id: TraceId | None = None
+    decision_id: UUID | None = None
+    action_id: UUID | None = None
+
+
+def _assert_linkable(prepared: Mapping[str, Any], kind: RecordKind) -> None:
+    """Refuse a record whose identity or links the schema would reject.
+
+    ``FR-72``: the kinds that describe one action must link to it. Checked here,
+    before the hash is computed, because a hash chain makes a malformed record
+    malformed for as long as the chain is retained.
+    """
+    try:
+        _RecordLinks.model_validate(
+            {
+                field: prepared[field]
+                for field in (FIELD_RECORD_ID, "trace_id", "decision_id", "action_id")
+                if field in prepared
+            }
+        )
+    except ValidationError as exc:
+        fields = sorted({".".join(str(part) for part in err["loc"]) for err in exc.errors()})
+        raise MalformedRecordError(
+            f"record identity does not satisfy the decision-record schema: "
+            f"{', '.join(fields)} (FR-72)"
+        ) from exc
+
+    if kind in RECORD_KINDS_REQUIRING_DECISION_LINK:
+        unlinked = [
+            field for field in ("decision_id", "action_id") if prepared.get(field) is None
+        ]
+        if unlinked:
+            raise MalformedRecordError(
+                f"a record of kind {kind.value!r} must link to its action via "
+                f"{', '.join(unlinked)} (FR-72)"
+            )
+
+
 def prepare_record(
     record: Mapping[str, Any],
     *,
@@ -513,11 +589,11 @@ def prepare_record(
             f"tenant_id exceeds {MAX_TENANT_ID_LENGTH} characters"
         )
 
-    kind = prepared.get(FIELD_KIND)
+    kind_value = prepared.get(FIELD_KIND)
     try:
-        RecordKind(kind)
+        kind = RecordKind(kind_value)
     except ValueError as exc:
-        raise MalformedRecordError(f"unknown decision-record kind: {kind!r}") from exc
+        raise MalformedRecordError(f"unknown decision-record kind: {kind_value!r}") from exc
 
     # The version a record is *stamped* with and the versions the store will
     # *accept* are different questions, and asking them of the same constant is
@@ -542,6 +618,12 @@ def prepare_record(
         prepared[FIELD_TIMESTAMP] = clock.now().isoformat()
     else:
         _assert_replayable_timestamp(timestamp)
+
+    # Last, so that a generated record_id is checked on the same terms as a
+    # supplied one: an identifier seam that produces something the schema
+    # rejects is a deployment defect, not a caller's mistake, and it must fail
+    # here rather than at the auditor.
+    _assert_linkable(prepared, kind)
 
     return prepared
 
@@ -588,14 +670,10 @@ def to_jsonl(records: Sequence[Mapping[str, Any]] | Iterator[Mapping[str, Any]])
         yield json.dumps(plain_value(record), sort_keys=True, separators=_JSONL_SEPARATORS)
 
 
-def _freeze(value: Any) -> Any:
-    """Return a deeply read-only copy of ``value``.
-
-    Freezing is also the copy: every container is rebuilt, so the stored record
-    shares no mutable structure with the mapping the caller submitted.
-    """
-    if isinstance(value, Mapping):
-        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze(item) for item in value)
-    return value
+#: Deeply read-only copy of a record, used for everything the store hands out.
+#:
+#: Aliased rather than reimplemented: this module and
+#: :mod:`neuroharness.models.common` had the same twelve lines under two names,
+#: and a freeze that is deep in one copy and shallow in the other is worse than
+#: either, because the shallow one looks correct at every call site.
+_freeze = freeze_document

@@ -175,6 +175,13 @@ class ChainBreak(str, Enum):
     #: The checkpoint itself does not verify, so it attests to nothing and
     #: cannot be used to judge the chain.
     CHECKPOINT_INVALID = "checkpoint_invalid"
+    #: The run does not start at the genesis record. Deleting the *front* of a
+    #: chain is as invisible to the links as deleting the back: every remaining
+    #: record still points at the one before it, and the suffix is internally
+    #: perfect. Only a caller that knows it asked for the whole chain can tell
+    #: a deletion from a deliberately partial read, which is why this is
+    #: reported rather than inferred.
+    MISSING_GENESIS = "missing_genesis"
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +267,7 @@ def verify_chain(
     records: Sequence[Mapping[str, Any]],
     *,
     expected_tenant_id: str | None = None,
+    expect_genesis: bool = False,
 ) -> ChainVerification:
     """Verify a contiguous run of one tenant's records.
 
@@ -270,9 +278,24 @@ def verify_chain(
     (the record does not point at the record before it).
 
     ``records`` may start part way through a chain, as :meth:`EvidenceStore.read`
-    with a ``start_seq`` returns. Only a run that starts at :data:`GENESIS_SEQ`
-    has its anchoring checked, because the predecessor of a mid-chain first
-    record is by definition not present to compare against.
+    with a ``start_seq`` returns. The predecessor of a mid-chain first record is
+    by definition not present to compare against, so by default the run's
+    *start* is not judged at all.
+
+    That default is safe only for a caller that asked for part of a chain. A
+    caller that asked for the whole of one and does not say so gets a hole:
+    deleting the first three records of a tenant's chain leaves records 3, 4 and
+    5, each still linked to the one before it, and the run verifies. Prefix
+    truncation is exactly as invisible to the links as the tail truncation a
+    checkpoint exists to catch -- a chain commits to what precedes each record,
+    and nothing at all commits to the chain having a beginning.
+
+    ``expect_genesis`` is how a caller says it holds the whole chain. It
+    requires the first record to be the genesis record: sequence
+    :data:`GENESIS_SEQ`, linking to no predecessor. The flag is opt-in rather
+    than the default because only the caller knows which it asked for, and
+    reporting a legitimate partial read as tampering is how a verifier gets
+    switched off.
 
     Pass ``expected_tenant_id`` when the caller knows which chain it asked for:
     without it, a run made entirely of another tenant's records is internally
@@ -334,6 +357,13 @@ def verify_chain(
             )
 
         if previous is None:
+            if expect_genesis and seq != GENESIS_SEQ:
+                return ChainVerification.broken(
+                    index,
+                    ChainBreak.MISSING_GENESIS,
+                    f"the chain starts at seq {seq}, not {GENESIS_SEQ}; the records "
+                    "before it are absent from a run that claims to be complete",
+                )
             if seq == GENESIS_SEQ and stored_prev is not None:
                 return ChainVerification.broken(
                     index,
@@ -507,11 +537,16 @@ def verify_against_checkpoint(
     Records *after* the checkpointed sequence are expected and ignored: a chain
     that has grown since its last checkpoint is the normal case.
 
-    ``records`` must include the checkpointed sequence. A run that begins after
-    it is reported as :attr:`ChainBreak.TRUNCATED`, because this function cannot
-    distinguish a deliberately partial read from a deletion, and treating an
-    unverifiable presentation as verified is the one answer that must never be
-    given (Constitution Art. II).
+    ``records`` must be the tenant's whole chain, from the genesis record to its
+    current head. The run is verified with ``expect_genesis``, so a chain whose
+    *front* has been deleted is reported as
+    :attr:`ChainBreak.MISSING_GENESIS` rather than accepted -- without that,
+    this function caught a deletion from the end and waved through the identical
+    deletion from the beginning, which is the worse of the two, because the
+    checkpoint's own head still matches. A run that begins after the
+    checkpointed sequence is reported as :attr:`ChainBreak.TRUNCATED`. Treating
+    an unverifiable presentation as verified is the one answer that must never
+    be given (Constitution Art. II).
 
     ``first_broken_index`` is a record index where one applies; it is
     ``len(records)`` when the fault is past the end of the run or is the
@@ -524,7 +559,7 @@ def verify_against_checkpoint(
             "the checkpoint signature does not verify, so it attests to nothing",
         )
 
-    chain = verify_chain(records, expected_tenant_id=tenant_id)
+    chain = verify_chain(records, expected_tenant_id=tenant_id, expect_genesis=True)
     if not chain.ok:
         return chain
 

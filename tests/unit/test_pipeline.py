@@ -499,22 +499,28 @@ def test_an_outage_between_the_two_records_withholds_the_token(
     assert [r[FIELD_KIND] for r in records(store)] == [RecordKind.EVALUATION.value]
 
 
-def test_a_token_whose_record_the_schema_rejects_is_never_returned(pipeline, store) -> None:
-    """``FR-72``: a decision identifier that is not a UUID stops at the writer.
+def test_a_decision_id_the_schema_rejects_stops_before_the_chain(pipeline, store) -> None:
+    """``FR-72``: an identifier the record schema rejects never reaches the chain.
 
-    ``DecisionContext.decision_id`` is a free string - it comes from whatever
-    identifier seam the deployment injects - while the record schema types it as
-    a UUID. A deployment wired to a non-UUID generator would otherwise mint
-    tokens whose issuance records no auditor can read, and it would find out
-    from the auditor. Here the evaluation record stands, the token is withheld,
-    and nothing executes.
+    ``DecisionContext.decision_id`` is a free string -- it comes from whatever
+    identifier seam the deployment injects -- while the record schema types it
+    as a UUID. A deployment wired to a non-UUID generator used to hash-chain an
+    evaluation record no auditor could read, and find out from the auditor;
+    the record was permanent by then, because that is what a hash chain is for.
+
+    The store now refuses the record outright, so the pipeline abstains, nothing
+    is written, and no token exists. All three matter: writing the record and
+    withholding only the token would still leave the unreadable record in the
+    chain.
     """
     outcome = pipeline.evaluate(allowing_request(), context(decision_id="dec-1"))
 
-    assert outcome.verdict is Verdict.ALLOW
+    assert outcome.verdict is Verdict.ABSTAIN
+    assert outcome.reason_codes[0].name is ReasonName.SCHEMA_INVALID
     assert outcome.token is None
     assert not outcome.permits_execution
-    assert [r[FIELD_KIND] for r in records(store)] == [RecordKind.EVALUATION.value]
+    assert outcome.evidence_failed
+    assert not records(store), "an unreadable record must not become permanent"
 
 
 def test_a_token_service_refusal_withholds_rather_than_raises(store, wal, clock, ids) -> None:

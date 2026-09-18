@@ -18,6 +18,7 @@ import hashlib
 import hmac
 from datetime import datetime, timezone
 from typing import Any, Final
+from uuid import UUID
 
 import pytest
 
@@ -55,6 +56,8 @@ def append(store: InMemoryEvidenceStore, clock: FrozenClock, tenant: str = TENAN
             "tenant_id": tenant,
             "kind": RecordKind.EVALUATION.value,
             "trace_id": "0" * 32,
+            "decision_id": str(UUID(int=0xDEC)),
+            "action_id": str(UUID(int=0xAC)),
             "evaluation": {"verdict": "ALLOW", "reason_codes": []},
         }
     )
@@ -183,3 +186,73 @@ def test_the_checkpoint_names_the_head_it_signed(
 
     assert checkpoint["last_seq"] == int(head[FIELD_SEQ])
     assert checkpoint["last_record_hash"] == str(head[FIELD_RECORD_HASH])
+
+
+# --- the other end of the chain ----------------------------------------------
+
+
+def truncate_prefix(store: InMemoryEvidenceStore, count: int, tenant: str = TENANT) -> None:
+    """Remove the first ``count`` records, reaching past the append-only API."""
+    del store._records[tenant][:count]  # noqa: SLF001 - simulating a store-level tamper
+
+
+def test_deleting_the_front_of_the_chain_is_caught(
+    store: InMemoryEvidenceStore, clock: FrozenClock
+) -> None:
+    """The mirror of truncation, and it was the one that got through.
+
+    A hash chain commits to what precedes each record and nothing commits to the
+    chain having a beginning, so deleting records 0, 1 and 2 leaves records 3, 4
+    and 5 each still linked to the one before it. The suffix is internally
+    perfect, its head still matches the signed checkpoint, and both checks
+    reported it healthy -- while the decisions that opened the incident were
+    gone.
+
+    Catching it needs nothing cryptographic, only the caller saying it asked for
+    the whole chain: a run that claims to be complete must start at the genesis
+    record.
+    """
+    fill(store, clock)
+    checkpoint = store.checkpoint(TENANT, key_id=KEY_ID, signer=signer)
+    assert checkpoint is not None
+
+    truncate_prefix(store, 3)
+
+    result = store.verify(TENANT)
+    assert not result.ok
+    assert result.reason is ChainBreak.MISSING_GENESIS
+
+    anchored = store.verify_against_checkpoint(TENANT, checkpoint, signer=signer)
+    assert not anchored.ok, "the checkpoint's head still matches, so only the anchor catches this"
+    assert anchored.reason is ChainBreak.MISSING_GENESIS
+
+
+def test_deleting_the_front_and_the_back_together_is_still_caught(
+    store: InMemoryEvidenceStore, clock: FrozenClock
+) -> None:
+    """Hollowing out a chain from both ends leaves a run that links perfectly."""
+    fill(store, clock)
+    checkpoint = store.checkpoint(TENANT, key_id=KEY_ID, signer=signer)
+    assert checkpoint is not None
+
+    truncate_prefix(store, 1)
+    truncate(store)
+
+    result = store.verify_against_checkpoint(TENANT, checkpoint, signer=signer)
+    assert not result.ok
+    assert result.reason is ChainBreak.MISSING_GENESIS
+
+
+def test_an_explicitly_partial_read_is_not_reported_as_tampering(
+    store: InMemoryEvidenceStore, clock: FrozenClock
+) -> None:
+    """A verifier that cries wolf on a legitimate read is a verifier switched off.
+
+    ``read(start_seq=...)`` is how an auditor pages through a long chain, and its
+    first record's predecessor is legitimately absent. Only the caller knows
+    which it asked for, which is why the anchor is opt-in rather than always on.
+    """
+    fill(store, clock)
+
+    assert store.verify(TENANT, start_seq=2).ok
+    assert store.verify(TENANT).ok, "and the default read is still the anchored one"
