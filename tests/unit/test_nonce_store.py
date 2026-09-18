@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -29,7 +29,7 @@ from neuroharness.tokens.nonce import (
     RevocationScope,
 )
 
-START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
 TOKEN_ID = "tok-00000001"
 OTHER_TOKEN_ID = "tok-00000002"
 THIRD_TOKEN_ID = "tok-00000003"
@@ -415,7 +415,7 @@ class TestIssuanceLedger:
         entry = ledger.entry_for(tenant_id=TENANT, decision_id=DECISION)
         assert entry is not None
         assert entry.issued_at == START
-        assert entry.issued_at.tzinfo == timezone.utc
+        assert entry.issued_at.tzinfo == UTC
 
     def test_an_issuance_is_never_forgotten(self) -> None:
         """Unlike a nonce, an issuance has no expiry backstop.

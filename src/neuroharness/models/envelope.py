@@ -34,8 +34,9 @@ Authoritative source: ``docs/sdd/schemas/action-envelope.schema.json``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
-from typing import Annotated, Any, Final, Mapping
+from typing import Annotated, Any, Final
 from uuid import UUID
 
 from pydantic import (

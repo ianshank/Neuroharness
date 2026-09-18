@@ -29,7 +29,8 @@ lease identity and the registry's declared template can never drift apart.
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, Collection, Final, Mapping
+from collections.abc import Collection, Mapping
+from typing import Annotated, Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -219,7 +220,7 @@ class ResourceKeyRegistry(BaseModel):
     ] = Field(default_factory=dict, validate_default=True)
 
     @model_validator(mode="after")
-    def _check_enumerations(self) -> "ResourceKeyRegistry":
+    def _check_enumerations(self) -> ResourceKeyRegistry:
         """Reject a catalogue that cannot produce well-formed keys.
 
         A malformed enumeration member is worse than a missing one: it would be
@@ -248,10 +249,18 @@ class ResourceKeyRegistry(BaseModel):
 
     # -- lookup ---------------------------------------------------------------
 
-    def validate(self, key: str) -> bool:  # noqa: A003 - the FR-34 vocabulary word
+    def is_well_formed(self, key: str) -> bool:
         """Return ``True`` when ``key`` matches ``kind:id(/kind:id)*``.
 
         Shape only, by design: see :func:`is_resource_key`.
+
+        Named ``is_well_formed`` rather than ``validate`` because
+        :class:`pydantic.BaseModel` already carries a ``validate`` classmethod
+        (deprecated, v1-compatible, returning an *instance*). Shadowing it with
+        an instance method returning ``bool`` meant a caller reaching for
+        pydantic's parsing got a shape check instead, with no error at either
+        end. No alias is kept: an alias would keep the shadow, which was the
+        defect.
         """
         return is_resource_key(key)
 

@@ -157,15 +157,15 @@ def constrained_pairs(draw: st.DrawFn) -> tuple[ResolutionRequest, ResolutionReq
     )
     if mutation == "critic":
         after = replace(
-            base, critic_outcomes=base.critic_outcomes + (draw(constraining_critics),)
+            base, critic_outcomes=(*base.critic_outcomes, draw(constraining_critics))
         )
     elif mutation == "infrastructure":
         after = replace(
             base,
-            infrastructure_reasons=base.infrastructure_reasons + (draw(infrastructure_reasons),),
+            infrastructure_reasons=(*base.infrastructure_reasons, draw(infrastructure_reasons)),
         )
     elif mutation == "fact":
-        after = replace(base, fact_states=base.fact_states + (draw(constraining_facts),))
+        after = replace(base, fact_states=(*base.fact_states, draw(constraining_facts)))
     elif mutation == "rate_limit":
         after = replace(base, rate_limited=True)
     elif mutation == "approval":
@@ -309,8 +309,7 @@ def test_an_infrastructure_reason_is_never_escalated(request: ResolutionRequest)
     with_outage = replace(
         request,
         policy=replace(request.policy, mode=Mode.ENFORCE),
-        infrastructure_reasons=request.infrastructure_reasons
-        + (ReasonCode(ReasonName.POLICY_ENGINE_UNAVAILABLE),),
+        infrastructure_reasons=(*request.infrastructure_reasons, ReasonCode(ReasonName.POLICY_ENGINE_UNAVAILABLE)),
     )
     resolution = resolve(with_outage)
 

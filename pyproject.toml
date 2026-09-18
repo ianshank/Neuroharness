@@ -12,7 +12,15 @@ license = { text = "UNLICENSED" }
 dependencies = ["pydantic>=2.7,<3"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov>=5", "hypothesis>=6", "freezegun>=1.5", "jsonschema>=4.20"]
+dev = [
+  "pytest>=8",
+  "pytest-cov>=5",
+  "hypothesis>=6",
+  "freezegun>=1.5",
+  "jsonschema>=4.20",
+  "ruff>=0.6",
+  "mypy>=1.11",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/neuroharness"]
@@ -32,3 +40,75 @@ branch = true
 
 [tool.coverage.report]
 exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError", "\\.\\.\\."]
+
+# --- Lint and type-check (governance section 3, stage 1) ----------------------
+#
+# The rule set a gate enforces has to live in the repository, or the gate is
+# whatever the person who last ran the command happened to type. Both tools were
+# named in governance section 3 from the start; neither was declared, neither was
+# installed, and mypy had never been run.
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# `select` is the blocking set: it is clean at zero and stays that way. Rules
+# move into it from `ratchet` below, never out of it.
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "RUF"]
+
+ignore = [
+  # `class X(str, Enum)` is deliberate and load-bearing, not legacy. Members
+  # compare equal to their string values, which is what lets a rendered reason
+  # code, a mode and a verdict round-trip through JSON and through pydantic
+  # without a custom serializer at every site. `StrEnum` changes `__str__` and
+  # `__format__`, so UP042's "fix" would silently alter what lands in an
+  # evidence record. The record is the thing this system exists to produce.
+  "UP042",
+  # `__all__` and `__slots__` are grouped by meaning, not alphabetically: a
+  # reader of `resolve/__init__.py` should see the seam, then the inputs, then
+  # the resolver. Sorting them scatters that.
+  "RUF022",
+  "RUF023",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests name what they prove, at length. A fixture table is clearer wide.
+"tests/**" = ["E501"]
+# B039 guards against a ContextVar default that callers can mutate in place,
+# which would leak one decision's correlation ids into the next. `LogContext` is
+# `@dataclass(frozen=True, slots=True)` and `bind_context` replaces rather than
+# mutates, so there is nothing to mutate. The suggested fix - a `None` default
+# initialized by `.set()` - would make every read of an unbound context a
+# branch, and an unbound context is the common case at process start.
+"src/neuroharness/observability/logging.py" = ["B039"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["neuroharness"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/neuroharness"]
+strict = true
+# Without the plugin, every `BaseModel` subclass resolves to `Any` and each
+# `@field_validator` reads as an untyped decorator, so the models carrying the
+# wire contract are the part of the tree `strict` checks least. The plugin also
+# type-checks synthesized `__init__` signatures, which is what catches a field
+# renamed in one place and constructed by its old name in another.
+plugins = ["pydantic.mypy"]
+# A module that silently stops being checked is a module that stops being
+# type-safe without anybody deciding that.
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_decorators = true
+no_implicit_reexport = true
+
+[tool.pydantic-mypy]
+# All three strictness flags. `init_forbid_extra` mirrors the `extra="forbid"`
+# every model on the wire path already sets at runtime; `init_typed` stops the
+# plugin falling back to `Any` for field annotations.
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true

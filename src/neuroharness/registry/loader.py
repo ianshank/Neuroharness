@@ -24,8 +24,9 @@ noticed (Constitution Art. II).
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Final, Mapping, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -132,7 +133,7 @@ class NullVerifier:
 
     __slots__ = ()
 
-    def verify(self, document: Mapping[str, Any]) -> None:  # noqa: D102 - see class docstring
+    def verify(self, document: Mapping[str, Any]) -> None:  # see class docstring
         return None
 
 
@@ -344,7 +345,7 @@ def _parse_yaml(text: str, file_path: Path) -> Any:
             f"cannot read {file_path}: YAML registries need PyYAML installed"
         ) from exc
 
-    class _StrictLoader(yaml.SafeLoader):  # type: ignore[misc, name-defined]
+    class _StrictLoader(yaml.SafeLoader):  # type: ignore[misc]
         """A safe loader whose mappings have exactly one value per key."""
 
         def construct_mapping(self, node: Any, deep: bool = False) -> dict[str, Any]:

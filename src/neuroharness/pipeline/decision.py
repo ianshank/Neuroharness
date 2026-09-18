@@ -61,8 +61,9 @@ log, where it is a debugging aid and cannot be mistaken for evidence.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Final, Mapping
+from typing import Any, Final
 
 from pydantic import ValidationError
 

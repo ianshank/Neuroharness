@@ -106,9 +106,7 @@ def _increment_plan_states() -> dict[str, str]:
             current = "active"
         elif lowered.startswith("**`partial`"):
             current = "partial"
-        elif lowered.startswith("**returned to `reserved`"):
-            current = None
-        elif line.startswith("## "):
+        elif lowered.startswith("**returned to `reserved`") or line.startswith("## "):
             current = None
         elif current is not None and (match := _PLAN_ROW_RE.match(line)):
             states[match.group(1)] = current

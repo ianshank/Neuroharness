@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Final, Protocol, runtime_checkable
 
@@ -171,7 +171,7 @@ class InMemoryNonceStore:
         broker_id: str,
         now: datetime,
     ) -> ConsumeOutcome:
-        moment = now.astimezone(timezone.utc)
+        moment = now.astimezone(UTC)
         with self._lock:
             self._purge(moment)
             existing = self._entries.get(token_id)
@@ -415,7 +415,7 @@ class InMemoryIssuanceLedger:
         now: datetime,
     ) -> IssuanceEntry | None:
         key = (tenant_id, decision_id)
-        moment = now.astimezone(timezone.utc)
+        moment = now.astimezone(UTC)
         with self._lock:
             existing = self._entries.get(key)
             if existing is not None:

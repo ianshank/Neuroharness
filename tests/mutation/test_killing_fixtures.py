@@ -21,7 +21,7 @@ green mutation stage is never mistaken for a complete gate.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 from uuid import UUID
@@ -52,7 +52,7 @@ FIXTURE_DIR: Final[Path] = Path(__file__).resolve().parents[1] / "fixtures"
 REGISTRY_FIXTURE: Final[Path] = FIXTURE_DIR / "registry" / "reference_deploy_registry.json"
 MUTATION_DIR: Final[Path] = FIXTURE_DIR / "mutations"
 
-ANCHOR: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+ANCHOR: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
 HMAC_SECRET: Final[bytes] = b"mutation-fixture-secret-32-bytes"
 ENVELOPE_DIGEST: Final[Digest] = Digest.from_hex("a" * 64)
 OTHER_ENVELOPE_DIGEST: Final[Digest] = Digest.from_hex("f" * 64)

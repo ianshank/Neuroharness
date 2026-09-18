@@ -37,11 +37,11 @@ are logged at error level, and they are not discarded by the log itself.
 from __future__ import annotations
 
 import threading
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final, Mapping, Protocol, Sequence, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 from neuroharness.errors import EvidenceUnavailableError, FailClosedError
-from neuroharness.models.common import freeze_document
 from neuroharness.evidence.chain import (
     FIELD_KIND,
     FIELD_RECORD_ID,
@@ -50,6 +50,7 @@ from neuroharness.evidence.chain import (
     plain_value,
 )
 from neuroharness.evidence.store import AppendResult, DuplicateRecordError, EvidenceStore
+from neuroharness.models.common import freeze_document
 from neuroharness.observability.logging import get_logger
 from neuroharness.reason import ReasonCode
 from neuroharness.seams import Clock

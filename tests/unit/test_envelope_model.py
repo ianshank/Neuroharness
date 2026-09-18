@@ -11,7 +11,7 @@ authorization rule a false positive.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from uuid import UUID
 
@@ -36,7 +36,7 @@ from neuroharness.models.envelope import (
 )
 from neuroharness.version import SchemaCompatibility, SchemaKind
 
-AT: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+AT: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
 TRACE_ID: Final[str] = "4bf92f3577b34da6a3ce929d0e0e4736"
 ACTION_ID: Final[UUID] = UUID("018f3e5c-1a2b-7c3d-8e4f-000000000001")
 

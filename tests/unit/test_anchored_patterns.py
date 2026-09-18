@@ -22,7 +22,8 @@ line: they fail against ``.match`` and pass against ``.fullmatch``.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Final
+from collections.abc import Callable
+from typing import Any, Final
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
@@ -75,7 +76,7 @@ def _newline_variants(value: str) -> list[Any]:
     """
     return [
         pytest.param(shape(value), id=identifier)
-        for shape, identifier in zip(_NEWLINE_SHAPES, _SHAPE_IDS)
+        for shape, identifier in zip(_NEWLINE_SHAPES, _SHAPE_IDS, strict=True)
     ]
 
 

@@ -7,8 +7,8 @@ injected seams, so a failure is reproducible and a replay test means something.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Iterator
+from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import pytest
 
@@ -17,7 +17,7 @@ from neuroharness.seams import FrozenClock, SequenceIdGenerator
 
 #: A fixed instant every test can anchor on. Chosen to match the worked example
 #: in the specification so fixtures and documentation agree.
-ANCHOR = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+ANCHOR = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
 
 #: The process-global logger :func:`configure_logging` installs handlers on.
 HARNESS_LOGGER_NAME = "neuroharness"

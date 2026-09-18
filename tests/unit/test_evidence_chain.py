@@ -10,16 +10,18 @@ from __future__ import annotations
 import copy
 import hashlib
 import hmac
-from datetime import datetime, timezone
-from typing import Any, Mapping
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
+from neuroharness.canonical.digest import digest_value
 from neuroharness.errors import ConfigurationError
 from neuroharness.evidence.chain import (
+    CHECKPOINT_SIGNING_DOMAIN,
     GENESIS_SEQ,
     SCHEMA_VERSION,
-    CHECKPOINT_SIGNING_DOMAIN,
     ChainBreak,
     MalformedRecordError,
     RecordKind,
@@ -30,11 +32,10 @@ from neuroharness.evidence.chain import (
     verify_chain,
     verify_checkpoint,
 )
-from neuroharness.canonical.digest import digest_value
 from neuroharness.models.common import Digest
 from neuroharness.seams import FrozenClock
 
-_START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+_START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
 _TRACE_ID = "0" * 32
 _SIGNING_KEY = b"test-checkpoint-key"
 _KEY_ID = "evidence-checkpoint-2026-09"

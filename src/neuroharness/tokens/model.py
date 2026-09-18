@@ -21,7 +21,7 @@ accidentally persist key material (``NFR-18``, decision-record schema).
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -64,7 +64,7 @@ def _utc(value: datetime) -> datetime:
     """
     if value.tzinfo is None:
         raise ValueError("token timestamps must be timezone-aware")
-    return value.astimezone(timezone.utc)
+    return value.astimezone(UTC)
 
 
 def _isoformat(value: datetime) -> str:

@@ -38,8 +38,9 @@ whether a shadow verdict stops execution.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import replace
-from typing import Final, Iterable, Sequence
+from typing import Final
 
 from neuroharness.defaults import MAX_REPAIR_BUDGET
 from neuroharness.models.common import Mode, Verdict
@@ -101,7 +102,7 @@ def resolve(request: ResolutionRequest) -> Resolution:
         resolution = replace(
             resolution,
             shadow_verdict=would_be.verdict,
-            explain=resolution.explain + (note,),
+            explain=(*resolution.explain, note),
         )
 
     return _logged(resolution, request)
@@ -201,7 +202,7 @@ def _resolve_pass(request: ResolutionRequest, *, honour_effective_modes: bool) -
     if request.rate_limited:
         return decided(
             Verdict.DENY,
-            (ReasonCode(ReasonName.REPAIR_RATE_LIMITED),) + unevaluated,
+            (ReasonCode(ReasonName.REPAIR_RATE_LIMITED), *unevaluated),
             "step 2: action rate limit exhausted for this (session root, action class)",
         )
     explain.append("step 2: rate limit not exhausted")
@@ -210,7 +211,11 @@ def _resolve_pass(request: ResolutionRequest, *, honour_effective_modes: bool) -
     if repairable and budget_spent:
         return decided(
             Verdict.DENY,
-            (ReasonCode(ReasonName.REPAIR_BUDGET_EXHAUSTED), *_reasons_of(repairable)) + unevaluated,
+            (
+                ReasonCode(ReasonName.REPAIR_BUDGET_EXHAUSTED),
+                *_reasons_of(repairable),
+                *unevaluated,
+            ),
             f"step 3: repairable hard FAIL from {_ids(repairable)} but iteration "
             f"{request.repair_iteration} has reached the budget of {budget}",
         )
@@ -226,7 +231,7 @@ def _resolve_pass(request: ResolutionRequest, *, honour_effective_modes: bool) -
         rule_id = _approval_rule_id(request)
         return decided(
             Verdict.DENY,
-            (ReasonCode(ReasonName.APPROVAL_NOT_PERMITTED, rule_id),) + unevaluated,
+            (ReasonCode(ReasonName.APPROVAL_NOT_PERMITTED, rule_id), *unevaluated),
             f"step 4: rule {rule_id} requires approval but the class is not approvable",
         )
     explain.append("step 4: no approval is required of a non-approvable class")

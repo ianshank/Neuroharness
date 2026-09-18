@@ -14,8 +14,9 @@ rather than degrading at runtime.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -71,7 +72,9 @@ class Settings(BaseModel):
     bundle_grace_seconds: int = Field(default=defaults.DEFAULT_BUNDLE_GRACE_SECONDS, ge=0, le=3600)
     approval_ttl_seconds: int = Field(default=defaults.DEFAULT_APPROVAL_TTL_SECONDS, ge=60)
     lease_timeout_seconds: int = Field(default=defaults.DEFAULT_LEASE_TIMEOUT_SECONDS, ge=1)
-    repair_budget: int = Field(default=defaults.DEFAULT_REPAIR_BUDGET, ge=0, le=defaults.MAX_REPAIR_BUDGET)
+    repair_budget: int = Field(
+        default=defaults.DEFAULT_REPAIR_BUDGET, ge=0, le=defaults.MAX_REPAIR_BUDGET
+    )
     new_actions_per_hour: int = Field(default=defaults.DEFAULT_NEW_ACTIONS_PER_HOUR, ge=1)
     record_retention_days: int = Field(default=defaults.DEFAULT_RECORD_RETENTION_DAYS, ge=1)
 

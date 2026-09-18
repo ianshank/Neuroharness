@@ -25,9 +25,10 @@ Nothing here reads a clock, an environment variable or a file. The same
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Mapping, Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 from neuroharness.defaults import DEFAULT_REPAIR_BUDGET
 from neuroharness.models.common import FactStatus, Mode, Verdict, VerifierResult

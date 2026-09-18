@@ -9,7 +9,7 @@ that is not a closed-catalogue identifier (``SEC-07``).
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from uuid import UUID
 
@@ -25,6 +25,7 @@ from neuroharness.models.common import (
     RuleOutcomeKind,
     VerifierResult,
 )
+from neuroharness.models.envelope import VersionedArtifact
 from neuroharness.models.record import (
     MAX_DEMOTE_MODE_WINDOW_SECONDS,
     Approval,
@@ -42,11 +43,10 @@ from neuroharness.models.record import (
     RecordKind,
     RuleOutcome,
 )
-from neuroharness.models.envelope import VersionedArtifact
 from neuroharness.reason import ReasonCode, ReasonName
 from neuroharness.version import SchemaCompatibility, SchemaKind
 
-AT: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+AT: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
 TRACE_ID: Final[str] = "4bf92f3577b34da6a3ce929d0e0e4736"
 RESOURCE_KEY: Final[str] = "service:example-api/target:production"
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -50,7 +50,7 @@ from neuroharness.tokens.nonce import (
 from neuroharness.tokens.service import MIN_TOKEN_TTL_SECONDS, ConsumeResult, TokenService
 from neuroharness.tokens.signer import HmacSigner, MultiKeySigner
 
-START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
 TENANT = "acme"
 OTHER_TENANT = "globex"
 BROKER = "broker-1"
@@ -840,9 +840,11 @@ class TestEvidence:
         self, harness: Harness, caplog: pytest.LogCaptureFixture
     ) -> None:
         signed = harness.issue()
-        with caplog.at_level(logging.WARNING, logger="neuroharness.tokens"):
-            with pytest.raises(TokenDigestMismatchError):
-                harness.verify(signed, envelope_digest=OTHER_ENVELOPE)
+        with (
+            caplog.at_level(logging.WARNING, logger="neuroharness.tokens"),
+            pytest.raises(TokenDigestMismatchError),
+        ):
+            harness.verify(signed, envelope_digest=OTHER_ENVELOPE)
         refusals = [r for r in caplog.records if r.getMessage() == "token_verify_refused"]
         assert refusals
         assert refusals[-1].fields["reason"] == "TOKEN_INVALID:digest_mismatch"  # type: ignore[attr-defined]
@@ -852,9 +854,11 @@ class TestEvidence:
     ) -> None:
         signed = harness.issue()
         harness.consume(signed)
-        with caplog.at_level(logging.WARNING, logger="neuroharness.tokens"):
-            with pytest.raises(TokenConsumedError):
-                harness.consume(signed, broker_id="broker-2")
+        with (
+            caplog.at_level(logging.WARNING, logger="neuroharness.tokens"),
+            pytest.raises(TokenConsumedError),
+        ):
+            harness.consume(signed, broker_id="broker-2")
         refusals = [r for r in caplog.records if r.getMessage() == "token_consume_refused"]
         assert refusals
         assert refusals[-1].fields["reason"] == "TOKEN_INVALID:consumed"  # type: ignore[attr-defined]

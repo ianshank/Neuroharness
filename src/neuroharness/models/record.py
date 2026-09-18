@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import re
 from enum import Enum
-from typing import Annotated, Any, Final
+from typing import Annotated, Any, Final, TypeAlias, cast
 from uuid import UUID
 
 from pydantic import (
@@ -879,6 +879,15 @@ class Checkpoint(WireModel):
 
 # --- The record envelope -----------------------------------------------------
 
+#: The eight payload blocks, as one name. Spelled once so the accessor below and
+#: :data:`RECORD_PAYLOAD_FIELDS` cannot come to disagree about what a record may
+#: carry: a ninth kind added to one and not the other is the defect this alias
+#: removes the room for.
+RecordPayload: TypeAlias = (
+    "Evaluation | DecisionTokenRecord | Approval | ExecutionReceipt "
+    "| Completion | EffectVerification | Override | Checkpoint"
+)
+
 #: Which payload field each record kind carries.
 RECORD_PAYLOAD_FIELDS: Final[dict[RecordKind, str]] = {
     RecordKind.EVALUATION: "evaluation",
@@ -1004,22 +1013,17 @@ class DecisionRecord(WireModel):
         return data
 
     @property
-    def payload(
-        self,
-    ) -> (
-        Evaluation
-        | DecisionTokenRecord
-        | Approval
-        | ExecutionReceipt
-        | Completion
-        | EffectVerification
-        | Override
-        | Checkpoint
-    ):
+    def payload(self) -> RecordPayload:
         """The one payload block this record carries."""
-        block = getattr(self, RECORD_PAYLOAD_FIELDS[self.kind])
-        assert block is not None  # guaranteed by _kind_matches_payload
-        return block
+        field = RECORD_PAYLOAD_FIELDS[self.kind]
+        block = getattr(self, field)
+        if block is None:  # pragma: no cover - _kind_matches_payload guarantees it
+            # Not an ``assert``: ``python -O`` strips those, and a stripped
+            # guard on the payload accessor would return ``None`` into a
+            # signature that promises a payload. A record whose kind and
+            # payload disagree is unrecordable, not silently empty.
+            raise ValueError(f"record of kind {self.kind.value} carries no {field} payload")
+        return cast(RecordPayload, block)
 
     @property
     def is_genesis(self) -> bool:

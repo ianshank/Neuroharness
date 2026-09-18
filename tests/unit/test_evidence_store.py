@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 import pytest
 
+from neuroharness import version as schema_version_module
 from neuroharness.errors import (
     ClockUnavailableError,
     EvidenceUnavailableError,
@@ -39,10 +40,9 @@ from neuroharness.evidence.store import (
 from neuroharness.evidence.wal import InMemoryWriteAheadLog
 from neuroharness.reason import ReasonName
 from neuroharness.seams import DeterministicUuidGenerator, FrozenClock
-from neuroharness import version as schema_version_module
 from neuroharness.version import SchemaCompatibility, SchemaKind
 
-_START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+_START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
 _TRACE_ID = "0" * 32
 _TENANT_A = "tenant-a"
 _TENANT_B = "tenant-b"
@@ -238,7 +238,7 @@ def test_append_refuses_an_unreadable_schema_version(
 
 def test_the_store_stamps_the_version_this_build_writes() -> None:
     """``chain.SCHEMA_VERSION`` is derived, not a second declaration (``F4``)."""
-    assert SCHEMA_VERSION == SchemaCompatibility.written_version(SchemaKind.RECORD)
+    assert SchemaCompatibility.written_version(SchemaKind.RECORD) == SCHEMA_VERSION
 
 
 def test_widening_the_readable_set_makes_the_store_accept_the_new_version(

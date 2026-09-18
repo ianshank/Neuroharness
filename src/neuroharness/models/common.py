@@ -9,9 +9,10 @@ evidence store be tested in isolation from one another.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Any, Final, Mapping
+from typing import Annotated, Any, Final
 
 from pydantic import AfterValidator, PlainSerializer
 

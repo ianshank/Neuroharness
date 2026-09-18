@@ -1,0 +1,49 @@
+# Local ratchets, so a finding is caught before it is pushed rather than after.
+#
+# These mirror CI stage 1 (`06-delivery-and-governance.md` section 3) exactly.
+# A hook that is stricter than CI trains people to skip hooks; a hook that is
+# looser makes CI the first place a finding appears, which is the slow loop this
+# file exists to close.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.0
+    hooks:
+      - id: ruff
+        name: ruff (lint)
+        args: [--fix]
+      - id: ruff-format
+        name: ruff (format check)
+        args: [--check]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # An evidence export is JSONL. A file whose last line has no newline
+      # produces a truncated final record when concatenated, which is the
+      # SEC-10 shape: the chain verifies and the last decision is gone.
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      # A malformed fixture is a fixture that silently stops testing its gate.
+      - id: check-json
+      - id: check-yaml
+      - id: check-toml
+      # The constitution forbids secrets in fixtures; this is the cheap half.
+      - id: detect-private-key
+      # A merge conflict marker in a signed registry is a registry that fails
+      # to parse at load, i.e. a fail-closed outage discovered in production.
+      - id: check-merge-conflict
+
+  - repo: local
+    hooks:
+      # Not the ruff-pre-commit mirror: mypy needs the project's own
+      # dependencies importable to see pydantic's plugin, and an isolated
+      # pre-commit environment does not have them. Running it from the working
+      # environment is the only way the plugin loads, and without the plugin
+      # every BaseModel subclass reads as `Any` - which is how 44 of the 48
+      # errors this config found had stayed invisible.
+      - id: mypy
+        name: mypy (strict, with the pydantic plugin)
+        entry: python3 -m mypy
+        language: system
+        types: [python]
+        pass_filenames: false

@@ -30,20 +30,16 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from uuid import UUID
-from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Iterator,
-    Mapping,
     Protocol,
-    Sequence,
     runtime_checkable,
 )
+from uuid import UUID
 
 from pydantic import ValidationError
 

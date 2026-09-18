@@ -535,7 +535,7 @@ def test_missing_action_classes_is_refused(document: dict[str, Any]) -> None:
 @pytest.mark.parametrize("value", [{}, "action_classes", 7])
 def test_action_classes_must_be_a_list(document: dict[str, Any], value: Any) -> None:
     document["action_classes"] = value
-    with pytest.raises(RegistryValidationError, match="must be a list|declares no action_classes"):
+    with pytest.raises(RegistryValidationError, match=r"must be a list|declares no action_classes"):
         load_registry(resign(document))
 
 
