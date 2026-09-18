@@ -19,7 +19,12 @@ from neuroharness.errors import (
     TokenModeMismatchError,
     UnregisteredActionClassError,
 )
-from neuroharness.reason import ReasonName, TokenInvalidReason
+from neuroharness.reason import (
+    INFRASTRUCTURE_REASONS,
+    ReasonCode,
+    ReasonName,
+    TokenInvalidReason,
+)
 from neuroharness.version import SchemaKind
 
 
@@ -154,3 +159,56 @@ def test_named_failures_map_to_their_reason(cls: type[FailClosedError], name: Re
 def test_configuration_error_is_not_a_decision_outcome() -> None:
     """Misconfiguration means refuse to start, not abstain at runtime."""
     assert not issubclass(errors.ConfigurationError, FailClosedError)
+
+
+# --- a token refusal is not an infrastructure failure ------------------------
+
+
+def _token_error_classes() -> list[type[TokenError]]:
+    found: list[type[TokenError]] = []
+    pending = [TokenError]
+    while pending:
+        cls = pending.pop()
+        found.append(cls)
+        pending.extend(cls.__subclasses__())
+    return sorted(found, key=lambda cls: cls.__name__)
+
+
+@pytest.mark.parametrize("cls", _token_error_classes(), ids=lambda cls: cls.__name__)
+def test_a_token_refusal_is_never_declared_an_infrastructure_reason(
+    cls: type[TokenError],
+) -> None:
+    """Section 5.5's infrastructure set is terminal and never escalates.
+
+    A token error means a binding did not hold: the envelope was edited, the
+    nonce was spent, the class mode moved. That is the harness working. Declaring
+    it ``HARNESS_UNHEALTHY`` -- which the base class used to do by inheritance —
+    would file a successful control as an outage, and would give it the
+    escalation behaviour of an outage, which is the opposite of what section 5.5
+    intends by putting engine and bundle failures in that set.
+    """
+    assert cls.reason_name is ReasonName.TOKEN_INVALID
+    assert cls.reason_name not in INFRASTRUCTURE_REASONS
+
+
+@pytest.mark.parametrize("cls", _token_error_classes(), ids=lambda cls: cls.__name__)
+def test_a_token_refusal_names_which_binding_failed(cls: type[TokenError]) -> None:
+    """``TOKEN_INVALID`` alone tells an operator nothing; the subject is the report."""
+    code = cls("refused").reason_code
+    assert code.name is ReasonName.TOKEN_INVALID
+    assert code.subject == cls.token_reason.value
+    assert code.render() == f"TOKEN_INVALID:{cls.token_reason.value}"
+    assert not code.is_infrastructure
+
+
+def test_the_unparameterised_fallback_refuses_rather_than_guessing() -> None:
+    """The path that would render a bare ``TOKEN_INVALID`` is not silently allowed.
+
+    ``TokenError.__init__`` always supplies the parameterised code, so this is
+    unreachable in the harness. It is asserted because the alternative design —
+    a name that renders without a subject -- would let a refusal be recorded as
+    "the token was invalid" with no way to say why, and a reason code that
+    cannot be acted on is the thing the closed catalogue exists to prevent.
+    """
+    with pytest.raises(ValueError, match="requires a subject"):
+        ReasonCode(ReasonName.TOKEN_INVALID)

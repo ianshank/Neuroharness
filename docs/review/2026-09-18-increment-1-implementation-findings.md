@@ -192,6 +192,22 @@ UTF-8 encoding, so the message raised `UnicodeEncodeError` the moment anything
 wrote it. A clean fail-closed refusal became a crash carrying no reason code, in
 the caller's logging path (Article II).
 
+### T-06 A token refusal declared itself an infrastructure failure (Medium)
+Found by pinning the error-to-reason table by value rather than by type.
+`TokenError` and its eight subclasses inherited `reason_name =
+HARNESS_UNHEALTHY`; only the instance's `reason_code` carried the correct
+`TOKEN_INVALID:<why>`. Section 5.5 puts `HARNESS_UNHEALTHY` in the fixed
+infrastructure set, whose abstentions are terminal and never escalate — so
+anything reading the declared name off one of these classes would file a
+working control (a broker refusing a token whose envelope digest does not
+match) as an outage, and would reason about its escalation behaviour backwards.
+Latent today, because only the unreachable fallback in `FailClosedError`
+reads it.
+**Resolution:** `reason_name` is `TOKEN_INVALID`. The fallback stays
+unreachable, and if it ever became reachable it raises for want of a subject,
+which is the right failure: there is no honest way to say *which* binding
+failed without being told.
+
 The remaining findings — the unverified redaction key set, untested inclusive
 boundaries on the bundle grace window and the HMAC secret floor, major-only
 schema-version negatives, `pytest.raises(Exception)` guarding constitutional
@@ -212,6 +228,7 @@ That is worth recording here for one reason: it is precisely the threat this pro
 | — | `TokenInvalidReason` has three sources of truth: the enum in `reason.py`, `_TOKEN_INVALID_PATTERN` in `models/record.py`, and a literal alternation in the published record schema. Same shape as F-06, and the reason the new duplicate-issuance refusal reports `HARNESS_UNHEALTHY` rather than a `TOKEN_INVALID` subject the schema does not carry. | Tech lead | No |
 | — | §5.5's "never for facts marked `required: true`" is enforced by the registry loader, not the resolver, because only required facts abstain at all. Confirm that placement is intended. | Policy owner | No |
 | — | `ADR-0021` follow-up: decide what an `argument_schema` must say about an integer-typed argument so that a value outside the IEEE-754 safe range cannot reach a digest. The rule is now enforced at the digest boundary, so this is defence in depth rather than the only control. | Policy owner | No |
+| — | `_SAFE_KEYS` in `observability/logging.py` is unreachable. Redaction matches the whole lowered key exactly, and the two sets are disjoint, so the `normalised not in _SAFE_KEYS` clause can never fire. The comment ("safe despite containing a sensitive substring") suggests substring matching was once intended. Decide which rule is wanted: substring matching, which makes `_SAFE_KEYS` live and also catches `auth_token` and `api_secret`, or exact matching, in which case `_SAFE_KEYS` should go. Both sets are now pinned by value, so an overlap would surface in review. | Tech lead | No |
 | — | `SequenceIdGenerator` is not thread-safe. A test seam only today; worth naming before anything real depends on it. | Tech lead | No |
 | — | Digest test vectors remain provisional until both `ADR-0021` rules are in force | Tech lead | Yes, for publishing vectors |
 | — | No `main` branch exists in the repository, so no pull request can be opened for this work. Needs a base branch created by someone with push rights. | Repository owner | Yes, for review |

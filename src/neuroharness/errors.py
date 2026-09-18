@@ -135,8 +135,25 @@ class ClockUnavailableError(FailClosedError):
 
 
 class TokenError(FailClosedError):
-    """Base for every reason the broker refuses a decision token."""
+    """Base for every reason the broker refuses a decision token.
 
+    ``reason_name`` is ``TOKEN_INVALID`` rather than the inherited
+    ``HARNESS_UNHEALTHY``, and the difference is not cosmetic: section 5.5 puts
+    ``HARNESS_UNHEALTHY`` in the fixed infrastructure set, whose abstentions are
+    terminal and never escalate. A broker refusing a token whose envelope
+    digest does not match is not the harness being unwell -- it is the harness
+    working -- so anything reading the declared name off one of these classes
+    would classify a successful control as an outage, and would reason about
+    its escalation behaviour backwards.
+
+    The inherited ``reason_code`` fallback that renders this name is
+    unreachable, because ``__init__`` always supplies the parameterised code.
+    If it ever became reachable, ``ReasonCode(TOKEN_INVALID)`` raises for want
+    of a subject, which is the loud failure this case deserves: there is no
+    honest way to say *which* binding failed without being told.
+    """
+
+    reason_name = ReasonName.TOKEN_INVALID
     token_reason: TokenInvalidReason = TokenInvalidReason.SIGNATURE
 
     def __init__(self, message: str) -> None:

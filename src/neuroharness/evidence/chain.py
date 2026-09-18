@@ -487,8 +487,8 @@ def verify_against_checkpoint(
     Truncation is the one tamper a hash chain cannot see. Each record commits to
     what precedes it and to nothing that follows, so deleting the last N records
     leaves every remaining link perfect: :func:`verify_chain` returns ``ok`` for
-    a chain that has had its most recent — and, during an incident, its most
-    interesting — decisions removed. The signed checkpoint is the external
+    a chain that has had its most recent -- and, during an incident, its most
+    interesting -- decisions removed. The signed checkpoint is the external
     statement of how far the chain had got, and this is the function that
     compares the two. Without it the checkpoint is a value that is produced,
     stored and never read, which is indistinguishable from not having one.
@@ -500,7 +500,7 @@ def verify_against_checkpoint(
     2. the chain's internal consistency, so that a rewritten record is reported
        as a rewrite rather than as whatever the comparison below would make of
        it;
-    3. that the run reaches the checkpointed sequence — if it stops short, the
+    3. that the run reaches the checkpointed sequence -- if it stops short, the
        records the checkpoint attests to are gone;
     4. that the record at that sequence is the record that was signed.
 
