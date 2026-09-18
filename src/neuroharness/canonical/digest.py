@@ -28,10 +28,17 @@ from an archived record long after the model that produced it has moved on.
 from __future__ import annotations
 
 import hashlib
+import math
+import re
 from collections.abc import Mapping
 from typing import Any, Final
 
-from neuroharness.canonical.jcs import DEFAULT_MAX_DEPTH, JSONValue, canonicalize
+from neuroharness.canonical.jcs import (
+    DEFAULT_MAX_DEPTH,
+    JSONValue,
+    canonical_string,
+    canonicalize,
+)
 from neuroharness.errors import CanonicalizationError
 from neuroharness.models.common import Digest
 from neuroharness.observability.logging import get_logger
@@ -43,6 +50,7 @@ __all__ = [
     "digest_value",
     "envelope_digest",
     "proposal_digest",
+    "renders_as_unsafe_integer",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -149,7 +157,42 @@ def digest_bytes(data: bytes) -> Digest:
 SAFE_INTEGER_BOUND: Final[int] = 2**53 - 1
 
 
-def _reject_unsafe_integers(value: Any, path: str = "") -> None:
+#: A canonical number that a JSON parser reads back as an integer rather than
+#: as a float. RFC 8785 emits a plain digit string for any value whose
+#: ECMAScript form has no fraction and no exponent, and that string parses as an
+#: ``int`` on the way back in -- whichever Python type produced it.
+_INTEGER_LITERAL_RE: Final[re.Pattern[str]] = re.compile(r"-?[0-9]+")
+
+
+def renders_as_unsafe_integer(value: int | float) -> bool:
+    """True when ``value``'s canonical form is an out-of-range integer literal.
+
+    The test is on the canonical *form*, never on the Python type, and that
+    distinction is the whole point of this function. ``1e20`` is a ``float`` in
+    Python, but RFC 8785 serialises it as ``100000000000000000000``; the broker
+    parses those bytes back into an ``int`` before recomputing the digest
+    (``FR-21``). A rule phrased over ``isinstance(value, int)`` therefore admits
+    the document at the gateway and refuses it at the broker, which is a
+    fail-closed refusal of an envelope nobody tampered with -- and one that only
+    appears in production, on the side of the system that has already decided.
+
+    Non-finite floats return ``False``: they have no canonical form at all, and
+    :func:`~neuroharness.canonical.jcs.canonicalize` rejects them with the path
+    that located them, which is the better error.
+    """
+    if isinstance(value, int):
+        return abs(value) > SAFE_INTEGER_BOUND
+    if not math.isfinite(value):
+        return False
+    rendered = canonical_string(value)
+    if not _INTEGER_LITERAL_RE.fullmatch(rendered):
+        return False
+    return abs(int(rendered)) > SAFE_INTEGER_BOUND
+
+
+def _reject_unsafe_numbers(
+    value: Any, path: str = "", *, depth: int = 0, max_depth: int = DEFAULT_MAX_DEPTH
+) -> None:
     """Refuse a digested document that a conforming JCS encoder would read differently.
 
     This restriction belongs here and not in :func:`canonicalize`. Canonicalising
@@ -158,36 +201,51 @@ def _reject_unsafe_integers(value: Any, path: str = "") -> None:
     silent cross-implementation digest mismatch - discovered much later, when a
     token inexplicably fails to verify - into a named rejection at the document
     that caused it.
+
+    ``max_depth`` mirrors the canonicaliser's own bound and defaults to the same
+    value. Without it this walk runs *first* and unbounded, so a document nested
+    past the interpreter's stack limit raised ``RecursionError`` - a bare
+    ``Exception`` that no caller catches and no reason code names - instead of
+    the :class:`~neuroharness.errors.CanonicalizationError` the depth guard
+    exists to produce. An error that escapes the fail-closed hierarchy is an
+    inability to evaluate that does not stop execution (Constitution Art. II).
     """
     if isinstance(value, bool):
         return
-    if isinstance(value, int):
-        if abs(value) > SAFE_INTEGER_BOUND:
+    if isinstance(value, (int, float)):
+        if renders_as_unsafe_integer(value):
             raise CanonicalizationError(
-                f"integer at {path or '<document root>'} is outside the range that "
-                f"survives IEEE-754 ({SAFE_INTEGER_BOUND}); a digested document must "
-                "carry such a value as a string (ADR-0021)"
+                f"number at {path or '<document root>'} canonicalises to an integer "
+                f"outside the range that survives IEEE-754 ({SAFE_INTEGER_BOUND}); a "
+                "digested document must carry such a value as a string (ADR-0021)"
             )
         return
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            _reject_unsafe_integers(item, f"{path}/{key}")
-        return
-    if isinstance(value, (list, tuple)):
-        for index, item in enumerate(value):
-            _reject_unsafe_integers(item, f"{path}/{index}")
+    if isinstance(value, (Mapping, list, tuple)):
+        if depth >= max_depth:
+            raise CanonicalizationError(
+                f"value at {path or '<document root>'} exceeds the maximum nesting "
+                f"depth of {max_depth}"
+            )
+        members = (
+            value.items()
+            if isinstance(value, Mapping)
+            else ((str(index), item) for index, item in enumerate(value))
+        )
+        for key, item in members:
+            _reject_unsafe_numbers(item, f"{path}/{key}", depth=depth + 1, max_depth=max_depth)
 
 
 def digest_value(value: JSONValue, *, max_depth: int = DEFAULT_MAX_DEPTH) -> Digest:
     """Canonicalise ``value`` and digest the result.
 
     Raises :class:`~neuroharness.errors.CanonicalizationError` if the value has
-    no canonical form, or if it carries an integer outside the IEEE-754 safe
-    range (``ADR-0021``). That propagates rather than being softened into a
+    no canonical form, or if it carries a number that canonicalises to an
+    integer outside the IEEE-754 safe range (``ADR-0021``). That propagates
+    rather than being softened into a
     sentinel digest: a value with no identity cannot be evaluated, and Article
     II says an inability to evaluate ends in no execution.
     """
-    _reject_unsafe_integers(value)
+    _reject_unsafe_numbers(value, max_depth=max_depth)
     return _sha256(canonicalize(value, max_depth=max_depth), _KIND_VALUE)
 
 
@@ -256,7 +314,7 @@ def proposal_digest(
     neither can be passed off as the other.
     """
     projected = _project(envelope_like, PROPOSAL_DIGEST_PROJECTION)
-    _reject_unsafe_integers(projected)
+    _reject_unsafe_numbers(projected, max_depth=max_depth)
     return _sha256(canonicalize(projected, max_depth=max_depth), _KIND_PROPOSAL)
 
 
@@ -270,5 +328,5 @@ def envelope_digest(
     digest, so a token issued against one evaluation cannot authorise another
     (``FR-20``, ``FR-21``). That fragility is the property, not a cost of it.
     """
-    _reject_unsafe_integers(envelope_like)
+    _reject_unsafe_numbers(envelope_like, max_depth=max_depth)
     return _sha256(canonicalize(envelope_like, max_depth=max_depth), _KIND_ENVELOPE)

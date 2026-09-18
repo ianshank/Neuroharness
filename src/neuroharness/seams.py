@@ -17,7 +17,15 @@ from typing import Protocol, runtime_checkable
 
 from neuroharness.errors import ClockUnavailableError
 
-__all__ = ["Clock", "IdGenerator", "SystemClock", "FrozenClock", "UuidGenerator", "SequenceIdGenerator"]
+__all__ = [
+    "Clock",
+    "IdGenerator",
+    "SystemClock",
+    "FrozenClock",
+    "UuidGenerator",
+    "SequenceIdGenerator",
+    "DeterministicUuidGenerator",
+]
 
 
 @runtime_checkable
@@ -104,3 +112,28 @@ class SequenceIdGenerator:
     def new_id(self) -> str:
         self._counter += 1
         return f"{self._prefix}-{self._counter:08d}"
+
+
+class DeterministicUuidGenerator:
+    """Predictable identifiers that are still UUIDs.
+
+    :class:`SequenceIdGenerator` is deterministic but its output is not a UUID,
+    and the decision-record schema types ``record_id``, ``decision_id``,
+    ``action_id`` and ``token_id`` as UUIDs. A test driven by the former
+    therefore exercises a record shape production would reject, which is the
+    worst kind of green.
+
+    Counting into :meth:`uuid.UUID.int` keeps both properties at once: the same
+    test run produces the same identifiers, and every identifier validates. The
+    ``offset`` separates two generators in one test so that, say, a record id
+    and a token id cannot collide and hide a mix-up.
+    """
+
+    __slots__ = ("_counter",)
+
+    def __init__(self, *, offset: int = 0) -> None:
+        self._counter = offset
+
+    def new_id(self) -> str:
+        self._counter += 1
+        return str(uuid.UUID(int=self._counter))
