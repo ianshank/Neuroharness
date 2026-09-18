@@ -23,6 +23,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
 import pytest
 
@@ -68,6 +69,32 @@ FORBIDDEN_STRING_LITERALS: frozenset[str] = frozenset(
 
 #: Byte and bit sizes are structure (hash widths, encodings), not policy.
 ALLOWED_IN_CALLS = frozenset({"range", "len", "round", "int", "float", "zfill", "ljust", "rjust"})
+
+
+def _operand_literals(node: ast.AST) -> Iterator[ast.Constant]:
+    """Yield every literal an expression contributes to the position it sits in.
+
+    ``900``, ``900 + 1``, ``-900``, ``60 * 15`` and ``x in (900, 1800)`` are one
+    threshold written five ways, and only the first is a bare ``ast.Constant``.
+    Checking the operand node itself therefore left the rule enforceable only
+    against the spelling nobody who wanted to avoid it would use.
+
+    The walk descends through arithmetic, negation and literal collections,
+    which are the forms that carry a number through to the enclosing comparison
+    or default unchanged. It stops at calls, names and subscripts: those get
+    their numbers from somewhere else, and ``visit_Call`` already governs the
+    structural helpers, so widening here cannot change their verdict.
+    """
+    if isinstance(node, ast.Constant):
+        yield node
+    elif isinstance(node, ast.UnaryOp):
+        yield from _operand_literals(node.operand)
+    elif isinstance(node, ast.BinOp):
+        yield from _operand_literals(node.left)
+        yield from _operand_literals(node.right)
+    elif isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        for element in node.elts:
+            yield from _operand_literals(element)
 
 
 @dataclass(frozen=True)
@@ -124,8 +151,10 @@ class _MagicNumberVisitor(ast.NodeVisitor):
             self._check(default, f"the default of {node.name}()")
 
     def _check(self, node: ast.AST, context: str) -> None:
-        if not isinstance(node, ast.Constant):
-            return
+        for literal in _operand_literals(node):
+            self._check_literal(literal, context)
+
+    def _check_literal(self, node: ast.Constant, context: str) -> None:
         value = node.value
         if isinstance(value, bool):
             return
@@ -214,3 +243,69 @@ def test_visitor_allows_structural_numbers(tmp_path: Path) -> None:
     visitor = _MagicNumberVisitor("structural.py")
     visitor.visit(ast.parse(planted.read_text(encoding="utf-8")))
     assert not visitor.violations
+
+
+#: One threshold, written the five ways a blocked change gets rewritten: a bound
+#: nudged by one, the same bound negated, a duration left in its factors, those
+#: factors parenthesised, and a pair of bounds tested for membership. Each pairs
+#: with a literal the scanner must name when it reports it.
+REWRITTEN_THRESHOLDS = (
+    ("age_seconds > 900 + 1", 900),
+    ("age_seconds > -900", 900),
+    ("age_seconds > 60 * 15", 15),
+    ("age_seconds > ((60 * 15) + 1)", 60),
+    ("age_seconds in (900, 1800)", 1800),
+)
+
+
+def _planted_violations(tmp_path: Path, source: str) -> list[Violation]:
+    planted = tmp_path / "planted.py"
+    planted.write_text(source, encoding="utf-8")
+    visitor = _MagicNumberVisitor("planted.py")
+    visitor.visit(ast.parse(planted.read_text(encoding="utf-8")))
+    return visitor.violations
+
+
+@pytest.mark.parametrize(("expression", "value"), REWRITTEN_THRESHOLDS, ids=lambda p: str(p))
+def test_a_threshold_rewritten_as_arithmetic_is_still_caught(
+    tmp_path: Path, expression: str, value: int
+) -> None:
+    """A gate that a one-character rewrite walks past is not a gate.
+
+    This scan is the only thing enforcing that a governing value is named, and an
+    unnamed threshold is a policy decision nobody reviewed (``T-17``). While only
+    a bare literal was examined, adding ``+ 1`` or a minus sign in front of a
+    blocked number shipped it - and the reviewer of that change would read a
+    passing structural test as evidence the number had been through the rule.
+    """
+    source = f"def decide(age_seconds):\n    if {expression}:\n        return 'STALE'\n    return 'FRESH'\n"
+    assert any(v.value == value for v in _planted_violations(tmp_path, source))
+
+
+def test_a_threshold_rewritten_in_an_argument_default_is_still_caught(
+    tmp_path: Path,
+) -> None:
+    """A default is configuration with no name, and hides arithmetic just as well.
+
+    ``ttl=60 * 15`` is the same unreviewed fifteen minutes as ``ttl=900``, and it
+    is worse placed: a signature is read as structure, so the number is less
+    likely to be questioned there than in the comparison it ends up in.
+    """
+    violations = _planted_violations(tmp_path, "def issue(subject, ttl=60 * 15):\n    return ttl\n")
+    assert {v.value for v in violations} == {60, 15}
+
+
+def test_structural_arithmetic_is_still_allowed(tmp_path: Path) -> None:
+    """Widening the scan must not make legitimate structure unwritable.
+
+    If ``len(items) - 1`` started failing, the pressure would be to add another
+    entry to the allowances rather than to name anything - and every widened
+    allowance is a place a real threshold can be parked afterwards.
+    """
+    source = (
+        "def window(items, limit):\n"
+        "    if len(items) - 1 > limit:\n"
+        "        return items[0:2]\n"
+        "    return items[len(items) - 1 :]\n"
+    )
+    assert not _planted_violations(tmp_path, source)
