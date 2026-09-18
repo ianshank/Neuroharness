@@ -19,6 +19,7 @@ import pytest
 from pydantic import ValidationError
 
 from neuroharness.canonical.digest import PROPOSAL_DIGEST_PROJECTION, proposal_digest
+from neuroharness.envelope import canonical_document
 from neuroharness.errors import SchemaVersionError
 from neuroharness.models import envelope as envelope_module
 from neuroharness.models.common import FactStatus, Principal
@@ -312,15 +313,23 @@ def test_the_model_does_not_share_structure_with_the_callers_mapping() -> None:
 
 
 def test_the_proposal_digest_survives_an_attempted_mutation() -> None:
-    """The property the freeze exists for, stated as a digest (``FR-04``)."""
-    document = envelope().model_dump(mode="json")
-    before = proposal_digest(document)
+    """The property the freeze exists for, stated as a digest (``FR-04``).
+
+    Digested through :func:`neuroharness.envelope.canonical_document` rather
+    than a bare ``model_dump``. This test used to call ``model_dump(mode="json")``
+    directly, which was the repository's *second* serialization convention - the
+    one that does not conform to the published schema and produces a different
+    envelope digest. It happened not to matter here, because the proposal digest
+    is a narrow projection that excludes facts (``ADR-0020``); it mattered a
+    great deal one function over. See ``tests/unit/test_envelope_wire.py``.
+    """
+    before = proposal_digest(canonical_document(envelope()))
 
     model = envelope()
     with pytest.raises(TypeError):
         model.proposal.arguments["service"] = "somewhere-else"
 
-    assert proposal_digest(model.model_dump(mode="json")) == before
+    assert proposal_digest(canonical_document(model)) == before
 
 
 @pytest.mark.parametrize(
