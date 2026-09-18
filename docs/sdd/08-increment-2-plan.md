@@ -320,12 +320,13 @@ Carried from increment 1 unchanged, because they are why increment 1 survived th
 ```
 Week 1   T1: §4.1 grammar · §4.3 EvaluationOutcome · §4.2 raised as D-7
          T2: P0-06 drafted · P0-11 · uv.lock + tool config
-         T3: CI stage 1 (defaults, blocking) · stage 11 id-checker
+         T3: CI stage 1 (defaults, blocking) · stage 11 id-checker + ADR index
 Week 2   T1: §4.4 ledger · §4.5 subject shapes · §4.6 totality + 4 tests
          T2: P0-06 reviewed · D-7 answered  ◀── MIDPOINT GATE for §6.9
          T1: §4.2 implemented per D-7's answer
          T3: §6.2 digest convention · §6.3 response type · §6.7 Article IV ratchet
-Week 3   T3: §6.1 envelope builder · §6.4 hot reload · §6.5 migrations
+Week 3   T2: §5.6 ADR accepts · restate the 100%-branch gate in both documents
+         T3: §6.1 envelope builder · §6.4 hot reload · §6.5 migrations
          T3: §6.8 A-xx registry · gitleaks · pip-audit · ruff ratchet
 Week 4   T3: §6.9 P1-18 if the midpoint gate passed, else buffer
          All: review, DoD, increment-3 plan
@@ -389,7 +390,9 @@ Beyond the standing Definition of Done in `06-delivery-and-governance.md` §6:
 15. A typed agent-facing response exists in which free text is unrepresentable and no token can leak.
 16. `MUT-07` is `active` and killed; `WF-05`, `WF-06b`, `WF-06c` and the SMT contract have declarations; every fixture that stays `partial` or `reserved` names the task that owes it.
 17. The full suite passes, coverage stays at or above the 90% floor, and **no test is skipped, weakened or quarantined.**
-18. Appendix A's measurements are re-run and this document's numbers updated — because §6.8's whole argument is that unenforced claims rot, and `07-increment-1-plan.md:139`'s stale "168" is the proof.
+18. The three sponsor escalations — `P0-12` (name the humans), `P0-13` (provision), §5.5 (branching model) — each have a decision or an explicitly recorded deferral with a date. An escalation that is simply still open at the end of the increment was not escalated.
+19. `ADR-0011` and `ADR-0012` exist as files; the 21 `Proposed` ADRs are resolved per `D-6`; the 100%-resolver-branch gate says the same thing in `06-delivery-and-governance.md` §3 and `02-technical-plan.md:399`.
+20. Appendix A's measurements are re-run and this document's numbers updated — because §6.8's whole argument is that unenforced claims rot, and `07-increment-1-plan.md:139`'s stale "168" is the proof.
 
 ---
 
