@@ -470,3 +470,33 @@ def test_concurrent_appends_produce_one_unbroken_chain_per_tenant(
     assert len({record["record_id"] for record in store.read(_TENANT_A)}) == (
         writers // 2 * per_writer
     )
+
+
+def test_enum_values_are_stored_in_their_wire_form(store: InMemoryEvidenceStore) -> None:
+    """The digest is over JSON, so a Python enum is normalised before hashing."""
+    result = store.append(_record(kind=RecordKind.OVERRIDE))
+
+    assert result.record["kind"] == "override"
+    assert not isinstance(result.record["kind"], RecordKind)
+    assert store.verify(_TENANT_A).ok
+
+
+def test_append_refuses_something_that_is_not_a_record(store: InMemoryEvidenceStore) -> None:
+    with pytest.raises(MalformedRecordError):
+        store.append(["tenant-a", "evaluation"])  # type: ignore[arg-type]
+
+
+def test_availability_is_readable(store: InMemoryEvidenceStore) -> None:
+    assert store.available is True
+    store.set_available(False)
+    assert store.available is False
+
+
+def test_writer_exposes_what_it_writes_through(
+    store: InMemoryEvidenceStore, clock: FrozenClock, ids: SequenceIdGenerator
+) -> None:
+    wal = InMemoryWriteAheadLog(clock=clock)
+    writer = EvidenceWriter(store, clock=clock, id_generator=ids, wal=wal)
+
+    assert writer.store is store
+    assert writer.wal is wal

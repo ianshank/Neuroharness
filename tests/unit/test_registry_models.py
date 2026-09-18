@@ -443,6 +443,17 @@ def test_rule_k_rejects_a_template_naming_an_undeclared_argument() -> None:
     assert "FR-34" in message(exc)
 
 
+def test_rule_k_skips_the_cross_check_when_the_schema_declares_no_properties() -> None:
+    """Nothing to cross-check against: a schema with no ``properties`` and
+    ``additionalProperties: false`` accepts no arguments at all, so the class is
+    unusable for an independent reason rather than misconfigured here."""
+    entry = action_class(
+        argument_schema={"type": "object", "additionalProperties": False},
+        resource_key_template="service:{service}",
+    )
+    assert entry.resource_key_template == "service:{service}"
+
+
 def test_rule_k_rejects_a_constant_template() -> None:
     """A constant key would serialise every call of the class against itself."""
     with pytest.raises(ValidationError) as exc:
@@ -466,6 +477,22 @@ def test_registry_rejects_a_template_kind_the_catalogue_does_not_enumerate() -> 
         )
     assert "the resource-key registry does not enumerate" in message(exc)
     assert "FR-34" in message(exc)
+
+
+def test_registry_without_enumerations_does_not_constrain_template_kinds() -> None:
+    """An empty catalogue constrains nothing; it must not deny every class."""
+    loaded = registry(resource_keys=ResourceKeyRegistry())
+    assert loaded.get("deployment.apply", "deploy_service").resource_key_template is not None
+
+
+def test_a_class_without_a_template_skips_the_kind_check() -> None:
+    entry = action_class(
+        effect_class=EffectClass.READ,
+        approvable=False,
+        approver_groups=(),
+        resource_key_template=None,
+    )
+    assert registry(action_classes=(entry,)).get("deployment.apply", "deploy_service") is entry
 
 
 # --- duplicate critic ids and fact names (SEC-07, Art. VIII) ----------------

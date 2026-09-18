@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from neuroharness import defaults
+from neuroharness.canonical import canonicalize, digest_value
 from neuroharness.config import UnregisteredClassPolicy
 from neuroharness.errors import (
     CanonicalizationError,
@@ -315,10 +316,19 @@ def test_canonical_bytes_are_key_order_independent() -> None:
     assert canonical_bytes({"a": 1}) == b'{"a":1}'
 
 
-def test_canonical_bytes_reject_floats() -> None:
-    """RFC 8785 number edge cases would make a digest disagree with its signer."""
-    with pytest.raises(CanonicalizationError, match="float"):
-        canonical_bytes({"action_classes": [{"timeout": 1.5}]})
+def test_canonical_bytes_delegate_to_the_shared_canonicaliser(document: dict[str, Any]) -> None:
+    """One definition of a document's byte identity, not two (``FR-04``)."""
+    assert canonical_bytes(document) == canonicalize(document)
+    payload = {k: v for k, v in document.items() if k not in UNSIGNED_FIELDS}
+    assert compute_registry_digest(document) == digest_value(payload)
+
+
+def test_canonical_bytes_reject_an_unserialisable_value() -> None:
+    """A value with no canonical form has no stable identity to sign."""
+    with pytest.raises(CanonicalizationError, match="has no JSON form"):
+        canonical_bytes({"action_classes": [{"critics": object()}]})
+    with pytest.raises(CanonicalizationError):
+        compute_registry_digest({"action_classes": object()})
 
 
 def test_digest_is_stable_across_reserialisation(document: dict[str, Any]) -> None:
@@ -489,6 +499,30 @@ def test_malformed_resource_keys_are_refused(document: dict[str, Any]) -> None:
         load_registry(resign(document))
 
 
+def test_resource_keys_must_be_an_object(document: dict[str, Any]) -> None:
+    document["resource_keys"] = ["service", "target"]
+    with pytest.raises(RegistryValidationError, match="resource_keys must be an object"):
+        load_registry(resign(document))
+
+
+def test_a_document_may_omit_the_optional_fields(document: dict[str, Any]) -> None:
+    """``resource_keys``, ``unregistered_class_policy`` and ``digest`` are optional.
+
+    Omitting the digest is only possible with an explicit :class:`NullVerifier`;
+    the policy then falls back to the fail-closed default.
+    """
+    minimal = {
+        "schema_version": document["schema_version"],
+        "registry_version": document["registry_version"],
+        "action_classes": [document["action_classes"][2]],
+    }
+    registry = load_registry(minimal, verifier=NullVerifier())
+    assert registry.digest is None
+    assert registry.unregistered_class_policy is UnregisteredClassPolicy.STRICT
+    assert registry.resource_keys.enumerations == {}
+    assert len(registry) == 1
+
+
 # --- FR-31 strict vs permissive ---------------------------------------------
 
 
@@ -534,10 +568,43 @@ def test_load_registry_file_reports_malformed_json(tmp_path: Path) -> None:
         load_registry_file(path)
 
 
+def test_load_registry_file_refuses_a_repeated_object_key(tmp_path: Path) -> None:
+    """A registry whose meaning depends on the parser has no single meaning.
+
+    ``json.loads`` keeps the last of a repeated key and says nothing, so a
+    document carrying ``"mode": "enforce"`` and ``"mode": "shadow"`` could be
+    signed against one reading and enforced under another.
+    """
+    path = tmp_path / "registry.json"
+    path.write_text(
+        '{"schema_version": "1.0", "mode": "enforce", "mode": "shadow"}', encoding="utf-8"
+    )
+    with pytest.raises(RegistryValidationError, match="ambiguous JSON"):
+        load_registry_file(path)
+
+
 def test_load_registry_file_reports_a_non_object_document(tmp_path: Path) -> None:
     path = tmp_path / "registry.json"
     path.write_text("[]", encoding="utf-8")
     with pytest.raises(RegistryValidationError, match="does not contain a registry object"):
+        load_registry_file(path)
+
+
+def test_load_registry_file_reads_yaml_when_pyyaml_is_available(
+    tmp_path: Path, document: dict[str, Any]
+) -> None:
+    """The technical plan allows a signed YAML or JSON registry (section 4.4)."""
+    yaml = pytest.importorskip("yaml")
+    path = tmp_path / "registry.yaml"
+    path.write_text(yaml.safe_dump(document, sort_keys=True), encoding="utf-8")
+    assert load_registry_file(path).registry_version == document["registry_version"]
+
+
+def test_load_registry_file_reports_malformed_yaml(tmp_path: Path) -> None:
+    pytest.importorskip("yaml")
+    path = tmp_path / "registry.yaml"
+    path.write_text("action_classes: [\n  - unclosed", encoding="utf-8")
+    with pytest.raises(RegistryValidationError, match="malformed YAML"):
         load_registry_file(path)
 
 

@@ -23,13 +23,13 @@ noticed (Constitution Art. II).
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any, Final, Mapping, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
+from neuroharness.canonical import canonicalize, digest_value, parse_json
 from neuroharness.errors import (
     CanonicalizationError,
     RegistryIntegrityError,
@@ -76,48 +76,16 @@ _KNOWN_DOCUMENT_FIELDS: Final[frozenset[str]] = frozenset(
 
 
 def canonical_bytes(document: Mapping[str, Any]) -> bytes:
-    """Return the canonical byte form of ``document`` for digesting.
+    """Return the RFC 8785 canonical byte form of ``document``.
 
-    Sorted keys, no insignificant whitespace, UTF-8 -- the RFC 8785 (JCS) subset
-    the technical plan mandates for digests, restricted to the value types a
-    registry document uses.
-
-    Floating-point values are *rejected* rather than serialised. RFC 8785's
-    number rules are subtle enough that two conforming implementations can
-    disagree on an edge case, and a digest that differs between the signer and
-    the verifier is an integrity failure with no cause anyone can find. No
-    registry field is a float, so refusing costs nothing and removes the class
-    of bug entirely.
+    Delegates to :func:`neuroharness.canonical.canonicalize` rather than
+    configuring ``json.dumps`` here. The byte-level identity of a document has
+    exactly one definition in this harness; a second one in the registry loader
+    would mean the registry an operator signed and the registry this module
+    verifies could differ by a whitespace convention and nobody would find out
+    until a digest mismatch with no cause.
     """
-    _reject_floats(document, path="$")
-    try:
-        text = json.dumps(
-            document,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        )
-    except (TypeError, ValueError) as exc:
-        raise CanonicalizationError(f"registry document is not canonicalisable: {exc}") from exc
-    return text.encode("utf-8")
-
-
-def _reject_floats(value: Any, *, path: str) -> None:
-    """Walk ``value`` and raise on any float. See :func:`canonical_bytes`."""
-    if isinstance(value, bool):
-        return
-    if isinstance(value, float):
-        raise CanonicalizationError(
-            f"registry document contains a float at {path}; registry values are strings, "
-            "integers, booleans, nulls, arrays and objects so that digests are stable"
-        )
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            _reject_floats(item, path=f"{path}.{key}")
-    elif isinstance(value, (list, tuple)):
-        for index, item in enumerate(value):
-            _reject_floats(item, path=f"{path}[{index}]")
+    return canonicalize(document)
 
 
 def compute_registry_digest(document: Mapping[str, Any]) -> Digest:
@@ -126,9 +94,13 @@ def compute_registry_digest(document: Mapping[str, Any]) -> Digest:
     The digest covers everything an operator wrote and nothing the signing step
     added, so a document can carry its own digest without the self-reference
     problem, and tampering with any policy field changes the result.
+
+    Raises :class:`~neuroharness.errors.CanonicalizationError` when the document
+    has no canonical form, rather than digesting a guess: a registry with no
+    stable identity cannot be the thing an operator signed.
     """
     payload = {k: v for k, v in document.items() if k not in UNSIGNED_FIELDS}
-    return Digest.from_hex(hashlib.sha256(canonical_bytes(payload)).hexdigest())
+    return digest_value(payload)
 
 
 # --- verification ------------------------------------------------------------
@@ -335,10 +307,16 @@ def _parse_document(text: str, file_path: Path) -> Mapping[str, Any]:
         except yaml.YAMLError as exc:  # pragma: no cover - parser-specific
             raise RegistryValidationError(f"malformed YAML in {file_path}: {exc}") from exc
     else:
+        # parse_json, not json.loads: it refuses a repeated object key instead of
+        # silently keeping the last one. A registry with two `mode` keys is a
+        # document whose meaning depends on the parser, and the signer's parser
+        # is not necessarily this one.
         try:
-            parsed = json.loads(text)
+            parsed = parse_json(text)
         except json.JSONDecodeError as exc:
             raise RegistryValidationError(f"malformed JSON in {file_path}: {exc}") from exc
+        except CanonicalizationError as exc:
+            raise RegistryValidationError(f"ambiguous JSON in {file_path}: {exc}") from exc
 
     if not isinstance(parsed, Mapping):
         raise RegistryValidationError(

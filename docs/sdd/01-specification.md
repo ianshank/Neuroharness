@@ -160,12 +160,16 @@ Inputs: infrastructure status, PDP outcomes, critic results with effective modes
 
 0. **Mode normalization.** A hard critic whose **own declared mode** is `shadow` or `advisory` is treated as soft for resolution; its would-be effect is recorded as `would_be_verdict`. The **class** mode does *not* demote its critics. Evaluation is identical in every mode (`INV-11`): the class mode governs only whether the broker consults the verdict and whether the token is marked `shadow`. If the class mode is `halted` → `DENY` (`CLASS_HALTED`).
 1. If any hard result is `FAIL` with `repairable = false` → `DENY`.
-2. If any **non-escalating infrastructure reason** is present (§5.5 list) → `ABSTAIN`, terminal, no repair, no escalation.
-3. If any hard result is `UNKNOWN`, `TIMEOUT` or `ERROR`, or any required fact is missing, stale or from a failed provider → `ABSTAIN`. Abstentions block repair (do not spend agent turns while evaluation is incomplete). Escalation to `REQUIRES_APPROVAL` only per §5.5.
-4. If any hard result is `FAIL` with `repairable = true` and `repair_iteration < repair_budget` → `REPAIR` (all counterexamples returned together).
-5. If any hard result is `FAIL` (budget exhausted) → `DENY` (`REPAIR_BUDGET_EXHAUSTED`).
-6. If the PDP requires approval (or an escalated abstention requires it): if the class is not `approvable` → `DENY` (`APPROVAL_NOT_PERMITTED:<rule_id>`); else if a resolved approval exists for this proposal digest and bundle digest (`harness_approval` fact) → continue; else → `REQUIRES_APPROVAL` (`APPROVAL_REQUIRED:<rule_id>`).
-7. Otherwise → `ALLOW`.
+2. If the action is rate limited → `DENY` (`REPAIR_RATE_LIMITED`).
+3. If any hard result is `FAIL` with `repairable = true` and `repair_iteration ≥ repair_budget` → `DENY` (`REPAIR_BUDGET_EXHAUSTED`).
+4. If approval is required and the class is not `approvable` → `DENY` (`APPROVAL_NOT_PERMITTED:<rule_id>`).
+5. If any **non-escalating infrastructure reason** is present (§5.5) → `ABSTAIN`, terminal, no repair, no escalation.
+6. If any hard result is `UNKNOWN`, `TIMEOUT` or `ERROR`, or any required fact is missing, stale or from a failed provider → `ABSTAIN`. Abstentions block repair (do not spend agent turns while evaluation is incomplete). Escalation to `REQUIRES_APPROVAL` only per §5.5.
+7. If any hard result is `FAIL` with `repairable = true` and budget remains → `REPAIR` (all counterexamples returned together).
+8. If approval is required: continue when a resolved approval exists for this proposal digest and bundle digest (`harness_approval` fact), else → `REQUIRES_APPROVAL` (`APPROVAL_REQUIRED:<rule_id>`).
+9. Otherwise → `ALLOW`.
+
+Every `DENY`-deciding condition is evaluated before every `ABSTAIN`-deciding one, and that ordering is load-bearing. An earlier draft placed the repair-budget and approvability denials *after* the abstention steps, which meant adding an abstention to a settled `DENY` softened it to `ABSTAIN`. That is not merely untidy: an abstention on an escalatable fact in an approvable class escalates to `REQUIRES_APPROVAL`, so an agent whose repair budget was exhausted could let a required fact go stale and convert a definitive denial into a human approval request. Adding a problem would have bought a path to `ALLOW` that did not exist before. A `DENY` that also has abstention reasons carries them as contributing reason codes, so the record still shows everything that was wrong.
 
 Post-resolution: if the evaluation record cannot be durably written, the response is overridden to `ABSTAIN` (`EVIDENCE_UNAVAILABLE`), no token is issued, and the gateway's local write-ahead log replays the record on recovery (`FR-23`). Soft critics never change the verdict.
 
@@ -668,6 +672,7 @@ Round-two finding IDs (`R2-S` security, `R2-C` consistency, `R2-D` delivery, `R2
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-09-18 | Initial draft derived from the research synthesis and the peer review. |
+| 0.5 | 2026-09-18 | A property test found §5.3 was not monotone: the repair-budget and approvability denials sat below the abstention steps, so adding an abstention softened a settled `DENY` into an `ABSTAIN`, which an approvable class could then escalate to human approval. Every `DENY`-deciding step now precedes every `ABSTAIN`-deciding one. |
 | 0.4 | 2026-09-18 | Implementation found §5.3 step 0 contradicted `INV-11` and `A-16`: as written, a shadow *class* demoted every hard critic, so the verdict itself became mode-dependent and a shadow class could never record the denial it exists to measure. Step 0 now demotes only on a critic's own declared mode. |
 | 0.3 | 2026-09-18 | Increment-1 review amendments: proposal-digest projection narrowed and declared as data (`ADR-0020`); rate-limit state added to the resolver's declared inputs so `REPAIR_RATE_LIMITED` has a home without breaking purity (`FR-05`, `FR-93`). |
 | 0.2 | 2026-09-18 | Round-two revision: proposal vs envelope digests and post-approval re-evaluation (`FR-04`, `FR-40`–`FR-47`); rollout modes never block on infrastructure failure, `halted` mode and override authority (`FR-48`, `FR-49`, `FR-80`, `INV-11`); resolution order rewritten with safety order, infrastructure step, mode normalization and approvability (§5.3–5.5); closed reason-code catalogue (§5.6); token payload with verdict and mode, revocation, leases, execution model, retries, batches (`FR-20`–`FR-27`, `FR-07`); fact-provider and resource-key registries, `asserted_by`, effect classes (`FR-14`, `FR-34`, `FR-35`, `SEC-11`); session identity and delegation credentials (`FR-06`, `SEC-12`, `SEC-13`); effect verification (`FR-57`); bundle-transition semantics (`FR-84`); repair linkage and rate limit (§5.4, `FR-93`); replay time semantics (`FR-71`); `NFR-21`, `NFR-22`; failure-mode table and scenarios `A-25`–`A-45` completed; `OQ-07`–`OQ-10`. |

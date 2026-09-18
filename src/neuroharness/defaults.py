@@ -27,6 +27,7 @@ __all__ = [
     "DEFAULT_NEW_ACTIONS_PER_HOUR",
     "DEFAULT_BUNDLE_GRACE_SECONDS",
     "DEFAULT_CRITIC_TIMEOUT_MS",
+    "MAX_DEMOTE_MODE_WINDOW_SECONDS",
     "DEFAULT_RECORD_RETENTION_DAYS",
     "DIGEST_PREFIX",
 ]
@@ -69,6 +70,13 @@ DEFAULT_APPROVAL_TTL_SECONDS: Final[int] = 86_400
 #: Wall-clock backstop for a critic. The primary bound for a solver is its
 #: deterministic resource limit; this only catches a wedged worker.
 DEFAULT_CRITIC_TIMEOUT_MS: Final[int] = 200
+
+# --- Operational overrides (FR-48) -------------------------------------------
+
+#: Ceiling on a ``demote_mode`` override. Demotion reduces enforcement, so it is
+#: deliberately short-lived: past this window the change must be made properly,
+#: as a signed registry change under two-person review, or lapse.
+MAX_DEMOTE_MODE_WINDOW_SECONDS: Final[int] = 3600
 
 # --- Evidence (NFR-16) -------------------------------------------------------
 

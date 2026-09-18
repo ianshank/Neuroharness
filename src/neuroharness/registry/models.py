@@ -158,25 +158,17 @@ class CriticRef(BaseModel):
     hard: bool
     mode: Mode
     timeout_ms: int = Field(default=defaults.DEFAULT_CRITIC_TIMEOUT_MS, ge=1)
+
+    #: Rule (e): mandatory, and an identifier rather than prose. The pattern is
+    #: the enforcement -- it has no default, rejects the empty and whitespace-only
+    #: string, and rejects a sentence -- because a critic that cannot name the
+    #: requirement it encodes is an unreviewable gate (``FR-32``, Art. V), and a
+    #: value quoted into a decision record may never be free text (``SEC-07``).
     source_requirement: str = Field(pattern=_SOURCE_REQUIREMENT_PATTERN, min_length=1)
+
     rlimit: int | None = Field(default=None, ge=1)
     properties: tuple[str, ...] = ()
     certified_model: str | None = None
-
-    @model_validator(mode="after")
-    def _check_source_requirement(self) -> "CriticRef":
-        """Rule (e): every critic declares a non-empty source requirement.
-
-        ``Field(min_length=1)`` catches the empty string; this catches the
-        whitespace-only string, which passes a length check and answers
-        Article V's question with nothing.
-        """
-        if not self.source_requirement.strip():
-            raise ValueError(
-                f"critic {self.id!r} declares no source requirement; a critic that cannot "
-                "name the requirement it encodes is unreviewable (FR-32, Art. V)"
-            )
-        return self
 
 
 class ActionClass(BaseModel):

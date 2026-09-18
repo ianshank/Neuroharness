@@ -38,6 +38,7 @@ from neuroharness.observability.logging import get_logger
 
 __all__ = [
     "PROPOSAL_DIGEST_PROJECTION",
+    "SAFE_INTEGER_BOUND",
     "digest_bytes",
     "digest_value",
     "envelope_digest",
@@ -139,14 +140,54 @@ def digest_bytes(data: bytes) -> Digest:
     return _sha256(data, _KIND_BYTES)
 
 
+#: Largest integer that survives an IEEE-754 double unchanged. RFC 8785 defines
+#: number serialisation through ECMAScript, which has only doubles; this
+#: implementation emits integers exactly so that an identifier is never rounded
+#: while computing the digest that authorises acting on it (``ADR-0021``).
+#: Outside this range the two encodings disagree, so a digested document may not
+#: carry such a value: it travels as a string instead.
+SAFE_INTEGER_BOUND: Final[int] = 2**53 - 1
+
+
+def _reject_unsafe_integers(value: Any, path: str = "") -> None:
+    """Refuse a digested document that a conforming JCS encoder would read differently.
+
+    This restriction belongs here and not in :func:`canonicalize`. Canonicalising
+    is serialisation; digesting is *identification*, and identity is the thing
+    two implementations must agree on. Catching it at the boundary turns a
+    silent cross-implementation digest mismatch - discovered much later, when a
+    token inexplicably fails to verify - into a named rejection at the document
+    that caused it.
+    """
+    if isinstance(value, bool):
+        return
+    if isinstance(value, int):
+        if abs(value) > SAFE_INTEGER_BOUND:
+            raise CanonicalizationError(
+                f"integer at {path or '<document root>'} is outside the range that "
+                f"survives IEEE-754 ({SAFE_INTEGER_BOUND}); a digested document must "
+                "carry such a value as a string (ADR-0021)"
+            )
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _reject_unsafe_integers(item, f"{path}/{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _reject_unsafe_integers(item, f"{path}/{index}")
+
+
 def digest_value(value: JSONValue, *, max_depth: int = DEFAULT_MAX_DEPTH) -> Digest:
     """Canonicalise ``value`` and digest the result.
 
     Raises :class:`~neuroharness.errors.CanonicalizationError` if the value has
-    no canonical form. That propagates rather than being softened into a
+    no canonical form, or if it carries an integer outside the IEEE-754 safe
+    range (``ADR-0021``). That propagates rather than being softened into a
     sentinel digest: a value with no identity cannot be evaluated, and Article
     II says an inability to evaluate ends in no execution.
     """
+    _reject_unsafe_integers(value)
     return _sha256(canonicalize(value, max_depth=max_depth), _KIND_VALUE)
 
 
@@ -214,10 +255,9 @@ def proposal_digest(
     are over documents of different shapes drawn from the same envelope, so
     neither can be passed off as the other.
     """
-    return _sha256(
-        canonicalize(_project(envelope_like, PROPOSAL_DIGEST_PROJECTION), max_depth=max_depth),
-        _KIND_PROPOSAL,
-    )
+    projected = _project(envelope_like, PROPOSAL_DIGEST_PROJECTION)
+    _reject_unsafe_integers(projected)
+    return _sha256(canonicalize(projected, max_depth=max_depth), _KIND_PROPOSAL)
 
 
 def envelope_digest(
@@ -230,4 +270,5 @@ def envelope_digest(
     digest, so a token issued against one evaluation cannot authorise another
     (``FR-20``, ``FR-21``). That fragility is the property, not a cost of it.
     """
+    _reject_unsafe_integers(envelope_like)
     return _sha256(canonicalize(envelope_like, max_depth=max_depth), _KIND_ENVELOPE)

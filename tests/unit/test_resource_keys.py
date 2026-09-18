@@ -116,6 +116,7 @@ def test_unknown_kind_raises_rather_than_returning_empty(registry: ResourceKeyRe
 def test_is_known_checks_membership_for_enumerated_kinds(registry: ResourceKeyRegistry) -> None:
     assert registry.is_known("service:checkout/target:production")
     assert not registry.is_known("service:checkout/target:prod")
+    assert not registry.is_known("not a resource key")
     # A kind the registry never declared is not this registry's business.
     assert registry.is_known("queue:orders")
     registry.assert_known("service:payments")

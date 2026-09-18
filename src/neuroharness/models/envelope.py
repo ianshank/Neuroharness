@@ -33,12 +33,12 @@ from enum import Enum
 from typing import Annotated, Any, Final
 from uuid import UUID
 
-from annotated_types import Ge, Le, MaxLen, MinLen
 from pydantic import (
     AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
+    SerializerFunctionWrapHandler,
     StringConstraints,
     field_validator,
     model_serializer,
@@ -289,7 +289,7 @@ class Claim(WireModel):
     value: ClaimValue
 
     @model_serializer(mode="wrap")
-    def _always_emit_value(self, handler: Any) -> dict[str, Any]:
+    def _always_emit_value(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         """Keep ``value`` present even when it is ``null``.
 
         The schema makes ``value`` required and explicitly nullable. Callers
@@ -315,9 +315,13 @@ class Proposal(WireModel):
     tool: ToolName
     intent: FactName
     arguments: dict[str, Any]
-    claims: Annotated[tuple[Claim, ...], MaxLen(MAX_CLAIMS)] | None = None
+    claims: Annotated[tuple[Claim, ...], Field(max_length=MAX_CLAIMS)] | None = None
     batch_dependencies: (
-        Annotated[tuple[Annotated[int, Ge(0)], ...], MaxLen(MAX_BATCH_DEPENDENCIES)] | None
+        Annotated[
+            tuple[Annotated[int, Field(ge=0)], ...],
+            Field(max_length=MAX_BATCH_DEPENDENCIES),
+        ]
+        | None
     ) = None
 
 
@@ -360,7 +364,7 @@ class Actor(WireModel):
     agent_version: VersionString
     principal: Principal
     delegation_chain: Annotated[
-        tuple[DelegationHop, ...], MinLen(1), MaxLen(MAX_DELEGATION_HOPS)
+        tuple[DelegationHop, ...], Field(min_length=1, max_length=MAX_DELEGATION_HOPS)
     ]
     environment: Environment
     model_identity: ModelIdentity | None = None
@@ -384,10 +388,10 @@ class ActionClassRef(WireModel):
     mode: Mode
     effect_class: EffectClass
     resource_key: ResourceKey | None = None
-    repair_budget: Annotated[int, Ge(0), Le(MAX_REPAIR_BUDGET)] | None = None
+    repair_budget: Annotated[int, Field(ge=0, le=MAX_REPAIR_BUDGET)] | None = None
     approvable: bool | None = None
     escalate_on: (
-        Annotated[tuple[ReasonName, ...], MaxLen(MAX_ESCALATE_ON)] | None
+        Annotated[tuple[ReasonName, ...], Field(max_length=MAX_ESCALATE_ON)] | None
     ) = None
     connector_kind: ConnectorKind | None = None
 
@@ -431,8 +435,8 @@ class Fact(WireModel):
     asserted_by: Principal | None = None
     observed_at: AwareDatetime | None = None
     fetched_at: AwareDatetime | None = None
-    ttl_seconds: Annotated[int, Ge(0)] | None = None
-    max_age_seconds: Annotated[int, Ge(0)] | None = None
+    ttl_seconds: Annotated[int, Field(ge=0)] | None = None
+    max_age_seconds: Annotated[int, Field(ge=0)] | None = None
     digest: Digest | None = None
 
     @model_validator(mode="after")
@@ -468,7 +472,9 @@ class Fact(WireModel):
         return self
 
     @model_serializer(mode="wrap")
-    def _emit_value_only_when_present(self, handler: Any) -> dict[str, Any]:
+    def _emit_value_only_when_present(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
         """Serialise ``value`` if and only if it is present.
 
         The field is excluded from ordinary serialisation and re-added here so
@@ -501,8 +507,8 @@ class BatchPosition(WireModel):
     """Where this call sits in a batched tool call (``FR-07``)."""
 
     batch_id: UUID
-    batch_index: Annotated[int, Ge(0)]
-    batch_size: Annotated[int, Ge(1), Le(MAX_BATCH_SIZE)]
+    batch_index: Annotated[int, Field(ge=0)]
+    batch_size: Annotated[int, Field(ge=1, le=MAX_BATCH_SIZE)]
     batch_policy: BatchPolicy
 
 
@@ -519,10 +525,10 @@ class Context(WireModel):
     session_root_id: SessionId
     trace_id: TraceId
     proposed_at: AwareDatetime
-    repair_iteration: Annotated[int, Ge(0), Le(MAX_REPAIR_BUDGET)]
+    repair_iteration: Annotated[int, Field(ge=0, le=MAX_REPAIR_BUDGET)]
     actor: Actor
     action_class: ActionClassRef
-    facts: Annotated[tuple[Fact, ...], MaxLen(MAX_FACTS)]
+    facts: Annotated[tuple[Fact, ...], Field(max_length=MAX_FACTS)]
     policy_bundle: VersionedArtifact
     registry: VersionedArtifact
     critic_versions: dict[CriticVersionKey, VersionString]
@@ -532,7 +538,7 @@ class Context(WireModel):
     stripped_proposal_keys: (
         Annotated[
             tuple[Annotated[str, StringConstraints(max_length=MAX_STRIPPED_KEY_LENGTH)], ...],
-            MaxLen(MAX_STRIPPED_KEYS),
+            Field(max_length=MAX_STRIPPED_KEYS),
         ]
         | None
     ) = None

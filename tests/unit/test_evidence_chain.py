@@ -449,3 +449,18 @@ def test_create_checkpoint_rejects_a_sequence_below_genesis() -> None:
             key_id=_KEY_ID,
             signer=_hmac_signer,
         )
+
+
+def test_compute_record_hash_refuses_a_non_mapping() -> None:
+    with pytest.raises(MalformedRecordError):
+        compute_record_hash(["not", "a", "record"], prev_hash=None)  # type: ignore[arg-type]
+
+
+def test_verify_chain_reports_a_non_mapping_element(clock: FrozenClock) -> None:
+    records = _build_chain("acme", 2, clock=clock)
+
+    result = verify_chain([records[0], "not a record"])  # type: ignore[list-item]
+
+    assert not result.ok
+    assert result.first_broken_index == 1
+    assert result.reason is ChainBreak.MALFORMED_RECORD

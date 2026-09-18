@@ -376,3 +376,41 @@ def test_outage_then_recovery_restores_every_refused_decision(
     assert store.verify(_TENANT_A).ok
     assert wal.pending() == ()
     assert isinstance(store, EvidenceStore)
+
+
+def test_stage_refuses_something_that_is_not_a_record(wal: InMemoryWriteAheadLog) -> None:
+    with pytest.raises(MalformedRecordError):
+        wal.stage(["tenant-a", "evaluation"])  # type: ignore[arg-type]
+
+
+def test_discard_all_on_an_empty_log_reports_nothing_dropped(
+    wal: InMemoryWriteAheadLog,
+) -> None:
+    assert wal.discard_all() == 0
+
+
+def test_replay_treats_a_refused_duplicate_as_a_duplicate(
+    store: InMemoryEvidenceStore, wal: InMemoryWriteAheadLog
+) -> None:
+    """Belt and braces: the store's own refusal is honoured, not turned into a failure.
+
+    A durable store that cannot answer ``has_record`` truthfully (a lagging
+    replica, say) must not cause a replay to abort or to double-write; the
+    store's unique-identity check is the backstop.
+    """
+
+    class _ForgetfulStore(_StoreFailingAfter):
+        def has_record(self, tenant_id: str, record_id: str) -> bool:
+            return False
+
+    record = _staged_record("rec-1")
+    store.append(record)
+    wal.stage(record)
+
+    report = wal.replay(_ForgetfulStore(store, limit=10))
+
+    assert report.ok
+    assert report.duplicates == ("rec-1",)
+    assert report.appended == ()
+    assert len(store) == 1
+    assert wal.pending() == ()

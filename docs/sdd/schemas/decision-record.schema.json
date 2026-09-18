@@ -526,7 +526,12 @@
                 "all_or_nothing"
               ]
             }
-          }
+          },
+          "required": [
+            "batch_id",
+            "batch_index"
+          ],
+          "description": "Which batch this evaluation belonged to (FR-07). batch_id and batch_index are required: a record that says a call was part of a batch without saying which one cannot be used to reconstruct the batch's dependency outcomes."
         },
         "mode": {
           "$ref": "#/$defs/Mode"

@@ -188,7 +188,16 @@ class OverrideKind(str, Enum):
 
 
 class CriticKind(str, Enum):
-    """Implementation family of a critic."""
+    """Implementation family of a critic, as the *registry* names it.
+
+    ``REGO`` is deliberately absent from the decision record's ``CriticResult``
+    vocabulary. The policy decision point is a critic in the registry's sense -
+    it is listed, versioned and has a source requirement - but its output is
+    recorded per rule as a ``RuleOutcome``, not as one aggregate critic result,
+    because §5.1 maps each rule outcome individually onto the verifier
+    vocabulary. Filing it as a ``CriticResult`` would collapse that mapping and
+    lose which rule fired.
+    """
 
     REGO = "rego"
     SMT = "smt"

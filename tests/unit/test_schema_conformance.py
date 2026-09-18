@@ -697,7 +697,11 @@ RECORD_NEGATIVES: Final[tuple[tuple[str, str, Any], ...]] = (
     ("hard_critic_with_a_score", "evaluation", _hard_critic_with_a_score),
     ("free_text_reason_code", "evaluation", _free_text_reason_code),
     ("reason_code_with_an_unshaped_subject", "evaluation", _reason_code_with_an_unshaped_subject),
-    ("evaluation_record_without_its_payload", "evaluation", _evaluation_record_without_its_payload),
+    (
+        "evaluation_record_without_its_payload",
+        "evaluation",
+        _evaluation_record_without_its_payload,
+    ),
     ("single_principal_demote_mode", "override", _single_principal_demote_mode),
     ("repeated_principal_demote_mode", "override", _repeated_principal_demote_mode),
     ("demote_mode_without_an_expiry", "override", _demote_mode_without_an_expiry),

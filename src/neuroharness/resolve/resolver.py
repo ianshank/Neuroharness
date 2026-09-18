@@ -17,6 +17,18 @@ over per-check verdicts. Repair must outrank approval while budget remains, but
 must not outrank abstention or denial; that is not expressible as a lattice join
 without hiding the infrastructure short-circuit (``ADR-0014``, alternatives).
 
+Every denial is decided before every abstention. That ordering is not cosmetic:
+with the abstention steps above the budget and approvability checks, an agent
+that had exhausted its repair budget - a definitive ``DENY`` - could let a
+required fact go stale and, on an approvable class that declared that fact
+escalatable, convert its denial into a ``REQUIRES_APPROVAL``. Adding a problem
+bought a path to execution that did not exist before. Denials first removes it,
+and makes the procedure monotone under the safety order without exception: a
+budget that is spent and a class nobody may approve are harness-side facts that
+do not depend on whatever the harness could not evaluate. The abstention reasons
+travel on the denial as contributing codes, so the record still shows everything
+that was wrong.
+
 *Fail closed in every mode.* Rollout mode changes only which critics count as
 blocking (step 0). It never suppresses an abstention: a missing fact or a dead
 policy engine blocks a shadow class exactly as it blocks an enforcing one
@@ -98,10 +110,10 @@ def resolve(request: ResolutionRequest) -> Resolution:
 def _resolve_pass(request: ResolutionRequest, *, honour_effective_modes: bool) -> Resolution:
     """Run section 5.3 once.
 
-    ``honour_effective_modes=True`` is the real pass: a hard critic outside
-    enforce is treated as soft. ``False`` is the shadow pass: every hard critic
-    counts, giving the verdict enforcement would have produced. Both passes are
-    the same code, which is the point.
+    ``honour_effective_modes=True`` is the real pass: a hard critic whose own
+    declared mode is ``shadow`` or ``advisory`` is treated as soft.  ``False``
+    is the shadow pass: every hard critic counts, giving the verdict enforcement
+    would have produced. Both passes are the same code, which is the point.
     """
     policy = request.policy
     explain: list[str] = []
@@ -109,8 +121,7 @@ def _resolve_pass(request: ResolutionRequest, *, honour_effective_modes: bool) -
     def decided(verdict: Verdict, reasons: Sequence[ReasonCode], line: str) -> Resolution:
         codes = _dedupe(reasons)
         explain.append(line)
-        rendered = ", ".join(code.render() for code in codes) or _NO_REASONS
-        explain.append(f"verdict: {verdict.value} ({rendered})")
+        explain.append(f"verdict: {verdict.value} ({_render(codes)})")
         return Resolution(
             verdict=verdict,
             reason_codes=codes,
@@ -136,53 +147,23 @@ def _resolve_pass(request: ResolutionRequest, *, honour_effective_modes: bool) -
         "soft critics never change the verdict"
     )
 
-    # --- Admission gate: repair rate limit (section 5.4, FR-93) -------------
-    # Not one of the seven numbered steps, because it is not a judgement about
-    # this action: it says the session has proposed too many new actions in this
-    # class to keep being evaluated. It is placed here, above the infrastructure
-    # abstention, so that the rate limit cannot be relieved by an outage - and
-    # so that adding an infrastructure failure to a rate-limited request cannot
-    # move the verdict from DENY down to ABSTAIN.
-    if request.rate_limited:
-        return decided(
-            Verdict.DENY,
-            (ReasonCode(ReasonName.REPAIR_RATE_LIMITED),),
-            "step 0: action rate limit exhausted for this (session root, action class)",
-        )
-    explain.append("step 0: rate limit not exhausted")
+    # Collected before the denial steps because every denial carries whatever
+    # else was wrong as contributing reason codes, even though it did not need
+    # them to decide.
+    failures = tuple(outcome for outcome in blocking if outcome.is_failure)
+    budget = min(policy.repair_budget, MAX_REPAIR_BUDGET)
+    budget_spent = request.repair_iteration >= budget
 
-    # --- Step 1: non-repairable hard failure --------------------------------
-    non_repairable = tuple(o for o in blocking if o.is_non_repairable_failure)
-    if non_repairable:
-        return decided(
-            Verdict.DENY,
-            _reasons_of(non_repairable),
-            "step 1: hard FAIL that cannot be repaired from "
-            f"{_ids(non_repairable)}; no proposal change can satisfy it",
-        )
-    explain.append("step 1: no non-repairable hard failure")
-
-    # --- Step 2: non-escalating infrastructure reasons ----------------------
-    # A hard critic that ERRORed contributes CRITIC_ERROR, which section 5.5
-    # lists as infrastructure. Surfacing it here rather than at step 3 matches
-    # the section 7 failure table and keeps the "no escalation, ever" property
-    # in one place instead of relying on the escalatable check further down.
-    infrastructure: list[ReasonCode] = list(request.infrastructure_reasons)
-    infrastructure.extend(
-        code
-        for code in _reasons_of(blocking)
-        if code.is_infrastructure
+    # A hard critic that ERRORed contributes ``CRITIC_ERROR``, which section 5.5
+    # lists as infrastructure. Deriving it here rather than at the abstention
+    # step matches the section 7 failure table and keeps "no escalation, ever"
+    # in one place. The ``reason`` field is honoured whatever the nominal
+    # result: a critic that reports an infrastructure reason is an
+    # infrastructure failure even if its result field says otherwise.
+    infrastructure: tuple[ReasonCode, ...] = tuple(request.infrastructure_reasons) + tuple(
+        code for code in _reasons_of(blocking) if code.is_infrastructure
     )
-    if infrastructure:
-        return decided(
-            Verdict.ABSTAIN,
-            infrastructure,
-            "step 2: infrastructure reason present; terminal abstention with no repair "
-            "and no escalation - a human cannot vouch for an engine that is down",
-        )
-    explain.append("step 2: no infrastructure reason")
 
-    # --- Step 3: other abstentions (they block repair) -----------------------
     # Each entry pairs the reason with whether its *source* permits escalation.
     # For a fact that is the class's per-fact ``escalatable`` flag; for a critic
     # there is no per-critic flag, so the reason name decides alone.
@@ -198,6 +179,68 @@ def _resolve_pass(request: ResolutionRequest, *, honour_effective_modes: bool) -
             if code is not None:
                 abstentions.append((code, fact.escalatable))
 
+    #: Everything the harness could not evaluate, in a stable order. Carried by
+    #: the denial steps so a record shows every problem, not only the decisive one.
+    unevaluated: tuple[ReasonCode, ...] = infrastructure + tuple(code for code, _ in abstentions)
+
+    # --- Step 1: non-repairable hard failure --------------------------------
+    non_repairable = tuple(o for o in blocking if o.is_non_repairable_failure)
+    if non_repairable:
+        return decided(
+            Verdict.DENY,
+            _reasons_of(non_repairable) + unevaluated,
+            "step 1: hard FAIL that cannot be repaired from "
+            f"{_ids(non_repairable)}; no proposal change can satisfy it",
+        )
+    explain.append("step 1: no non-repairable hard failure")
+
+    # --- Step 2: repair rate limit (section 5.4, FR-93) ---------------------
+    # Not a judgement about this action: it says the session has proposed too
+    # many new actions in this class to keep being evaluated.
+    if request.rate_limited:
+        return decided(
+            Verdict.DENY,
+            (ReasonCode(ReasonName.REPAIR_RATE_LIMITED),) + unevaluated,
+            "step 2: action rate limit exhausted for this (session root, action class)",
+        )
+    explain.append("step 2: rate limit not exhausted")
+
+    # --- Step 3: repair budget exhausted ------------------------------------
+    if failures and budget_spent:
+        return decided(
+            Verdict.DENY,
+            (ReasonCode(ReasonName.REPAIR_BUDGET_EXHAUSTED), *_reasons_of(failures)) + unevaluated,
+            f"step 3: repairable hard FAIL from {_ids(failures)} but iteration "
+            f"{request.repair_iteration} has reached the budget of {budget}",
+        )
+    explain.append(
+        f"step 3: repair budget not exhausted (iteration {request.repair_iteration} "
+        f"of {budget})"
+    )
+
+    # --- Step 4: approval required by a class nobody may approve ------------
+    # ``FR-45``: denied outright rather than left waiting for an approval that
+    # can never be valid.
+    if request.approval_required and not policy.approvable:
+        rule_id = _approval_rule_id(request)
+        return decided(
+            Verdict.DENY,
+            (ReasonCode(ReasonName.APPROVAL_NOT_PERMITTED, rule_id),) + unevaluated,
+            f"step 4: rule {rule_id} requires approval but the class is not approvable",
+        )
+    explain.append("step 4: no approval is required of a non-approvable class")
+
+    # --- Step 5: non-escalating infrastructure reasons ----------------------
+    if infrastructure:
+        return decided(
+            Verdict.ABSTAIN,
+            infrastructure + tuple(code for code, _ in abstentions),
+            "step 5: infrastructure reason present; terminal abstention with no repair "
+            "and no escalation - a human cannot vouch for an engine that is down",
+        )
+    explain.append("step 5: no infrastructure reason")
+
+    # --- Step 6: other abstentions (they block repair) -----------------------
     if abstentions:
         codes = [code for code, _ in abstentions]
         # Section 5.5. Every condition is necessary, and each one is a separate
@@ -218,76 +261,64 @@ def _resolve_pass(request: ResolutionRequest, *, honour_effective_modes: bool) -
         # A hard gate that FAILED is not an abstention, and escalation while one
         # is outstanding would put a human in front of an action a hard critic
         # has already rejected. Section 5.5 speaks only of abstention reasons;
-        # this keeps the procedure monotone (``ADR-0014``): without it, adding
-        # an abstention to a REPAIR turns it into REQUIRES_APPROVAL, which is
-        # closer to execution.
-        if any(o.is_failure for o in blocking):
+        # this also keeps the procedure monotone (``ADR-0014``): without it,
+        # adding an abstention to a REPAIR would produce REQUIRES_APPROVAL,
+        # which is closer to execution.
+        if failures:
             blockers.append("a hard critic FAILED; escalation may not overrule a hard gate")
 
         if blockers:
             return decided(
                 Verdict.ABSTAIN,
                 codes,
-                f"step 3: cannot evaluate ({_render(codes)}); abstention blocks repair; "
+                f"step 6: cannot evaluate ({_render(codes)}); abstention blocks repair; "
                 f"not escalated because {'; '.join(blockers)}",
             )
         return decided(
             Verdict.REQUIRES_APPROVAL,
             codes,
-            f"step 3: cannot evaluate ({_render(codes)}); every reason is escalatable and "
+            f"step 6: cannot evaluate ({_render(codes)}); every reason is escalatable and "
             "declared by an approvable class, so a human is asked and shown all of them",
         )
-    explain.append("step 3: nothing indeterminate; every required fact is fresh")
+    explain.append("step 6: nothing indeterminate; every required fact is fresh")
 
-    # --- Steps 4 and 5: repairable failures against the budget --------------
-    failures = tuple(o for o in blocking if o.is_failure)
-    budget = min(policy.repair_budget, MAX_REPAIR_BUDGET)
+    # --- Step 7: repairable failure with budget remaining -------------------
     if failures:
-        if request.repair_iteration < budget:
-            return decided(
-                Verdict.REPAIR,
-                _reasons_of(failures),
-                f"step 4: repairable hard FAIL from {_ids(failures)}; iteration "
-                f"{request.repair_iteration} of budget {budget}; all counterexamples "
-                "are returned together",
-            )
         return decided(
-            Verdict.DENY,
-            (ReasonCode(ReasonName.REPAIR_BUDGET_EXHAUSTED), *_reasons_of(failures)),
-            f"step 5: repairable hard FAIL from {_ids(failures)} but iteration "
-            f"{request.repair_iteration} has reached the budget of {budget}",
+            Verdict.REPAIR,
+            _reasons_of(failures),
+            f"step 7: repairable hard FAIL from {_ids(failures)}; iteration "
+            f"{request.repair_iteration} of budget {budget}; all counterexamples "
+            "are returned together",
         )
-    explain.append("step 4/5: no hard failure to repair")
+    explain.append("step 7: no hard failure to repair")
 
-    # --- Step 6: approval ----------------------------------------------------
+    # --- Step 8: approval ----------------------------------------------------
     if request.approval_required:
-        rule_id = request.approval_rule_id
-        if rule_id is None:  # pragma: no cover - ResolutionRequest rejects this at the door
-            raise ValueError("approval_required without approval_rule_id")
-        if not policy.approvable:
-            # ``FR-45``: a class nobody may authorise is denied outright rather
-            # than left waiting for an approval that can never be valid.
-            return decided(
-                Verdict.DENY,
-                (ReasonCode(ReasonName.APPROVAL_NOT_PERMITTED, rule_id),),
-                f"step 6: rule {rule_id} requires approval but the class is not approvable",
-            )
+        rule_id = _approval_rule_id(request)
         if not request.approval_satisfied:
             return decided(
                 Verdict.REQUIRES_APPROVAL,
                 (ReasonCode(ReasonName.APPROVAL_REQUIRED, rule_id),),
-                f"step 6: rule {rule_id} requires approval and none is resolved for this "
+                f"step 8: rule {rule_id} requires approval and none is resolved for this "
                 "proposal digest and bundle digest",
             )
         explain.append(
-            f"step 6: rule {rule_id} requires approval and a resolved approval is bound to "
+            f"step 8: rule {rule_id} requires approval and a resolved approval is bound to "
             "this proposal digest; continuing on fresh facts (FR-47)"
         )
     else:
-        explain.append("step 6: no rule requires approval")
+        explain.append("step 8: no rule requires approval")
 
-    # --- Step 7 --------------------------------------------------------------
-    return decided(Verdict.ALLOW, (), "step 7: every enforced check passed")
+    # --- Step 9 --------------------------------------------------------------
+    return decided(Verdict.ALLOW, (), "step 9: every enforced check passed")
+
+
+def _approval_rule_id(request: ResolutionRequest) -> str:
+    rule_id = request.approval_rule_id
+    if rule_id is None:  # pragma: no cover - ResolutionRequest rejects this at the door
+        raise ValueError("approval_required without approval_rule_id")
+    return rule_id
 
 
 def _reasons_of(outcomes: Iterable[CriticOutcome]) -> tuple[ReasonCode, ...]:
@@ -299,8 +330,8 @@ def _dedupe(codes: Iterable[ReasonCode]) -> tuple[ReasonCode, ...]:
     """Drop repeats while keeping first-seen order.
 
     Order is part of the contract: the head of the tuple is the reason that
-    decided the verdict, and a record that reordered its reasons between two
-    replays of the same inputs would falsify ``INV-09``.
+    decided the verdict, the rest are contributing, and a record that reordered
+    its reasons between two replays of the same inputs would falsify ``INV-09``.
     """
     seen: set[ReasonCode] = set()
     unique: list[ReasonCode] = []
@@ -325,7 +356,9 @@ def _logged(resolution: Resolution, request: ResolutionRequest) -> Resolution:
         "verdict_resolved",
         verdict=resolution.verdict.value,
         reason_codes=[code.render() for code in resolution.reason_codes],
-        shadow_verdict=None if resolution.shadow_verdict is None else resolution.shadow_verdict.value,
+        shadow_verdict=(
+            None if resolution.shadow_verdict is None else resolution.shadow_verdict.value
+        ),
         class_mode=request.policy.mode.value,
         repair_iteration=request.repair_iteration,
     )

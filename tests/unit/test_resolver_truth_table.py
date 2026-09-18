@@ -44,6 +44,7 @@ HARD_FAIL_FINAL = CriticOutcome(critic_id=CRITIC, result=VerifierResult.FAIL, re
 HARD_FAIL_UNSET = CriticOutcome(critic_id=CRITIC, result=VerifierResult.FAIL)
 HARD_FAIL_REPAIRABLE = CriticOutcome(critic_id=CRITIC, result=VerifierResult.FAIL, repairable=True)
 HARD_UNKNOWN = CriticOutcome(critic_id=CRITIC, result=VerifierResult.UNKNOWN)
+HARD_UNKNOWN_OTHER = CriticOutcome(critic_id=OTHER_CRITIC, result=VerifierResult.UNKNOWN)
 HARD_TIMEOUT = CriticOutcome(critic_id=CRITIC, result=VerifierResult.TIMEOUT)
 HARD_ERROR = CriticOutcome(critic_id=CRITIC, result=VerifierResult.ERROR)
 HARD_NOT_APPLICABLE = CriticOutcome(critic_id=CRITIC, result=VerifierResult.NOT_APPLICABLE)
@@ -224,16 +225,6 @@ ROWS: tuple[Row, ...] = (
         ENGINE_DOWN,
     ),
     Row(
-        "abstain/infrastructure-beats-an-exhausted-repair-budget",
-        request(
-            critics=(HARD_FAIL_REPAIRABLE,),
-            infrastructure=(ENGINE_DOWN,),
-            repair_iteration=DEFAULT_REPAIR_BUDGET,
-        ),
-        Verdict.ABSTAIN,
-        ENGINE_DOWN,
-    ),
-    Row(
         "abstain/infrastructure-is-never-escalated",
         request(ESCALATING, infrastructure=(BUNDLE_BAD,)),
         Verdict.ABSTAIN,
@@ -390,6 +381,71 @@ ROWS: tuple[Row, ...] = (
         Verdict.DENY,
         ReasonCode(ReasonName.REPAIR_BUDGET_EXHAUSTED),
         also_carries=(rule_failed(),),
+    ),
+    # --- Denials are decided before abstentions -----------------------------
+    # Each of these would have been an ABSTAIN under the original section 5.3
+    # order, and an ABSTAIN on an escalatable reason can become a
+    # REQUIRES_APPROVAL. These rows are the killing fixtures for that path: a
+    # spent budget or a non-approvable class is a harness-side fact that does
+    # not depend on whatever the harness could not evaluate, so it wins.
+    Row(
+        "deny/exhausted-budget-beats-a-missing-required-fact",
+        request(
+            critics=(HARD_FAIL_REPAIRABLE,),
+            facts=(fact(FactStatus.MISSING),),
+            repair_iteration=DEFAULT_REPAIR_BUDGET,
+        ),
+        Verdict.DENY,
+        ReasonCode(ReasonName.REPAIR_BUDGET_EXHAUSTED),
+        also_carries=(rule_failed(), ReasonCode(ReasonName.FACT_MISSING, FACT)),
+    ),
+    Row(
+        "deny/exhausted-budget-beats-infrastructure",
+        request(
+            critics=(HARD_FAIL_REPAIRABLE,),
+            infrastructure=(ENGINE_DOWN,),
+            repair_iteration=DEFAULT_REPAIR_BUDGET,
+        ),
+        Verdict.DENY,
+        ReasonCode(ReasonName.REPAIR_BUDGET_EXHAUSTED),
+        also_carries=(ENGINE_DOWN,),
+    ),
+    Row(
+        "deny/exhausted-budget-cannot-be-softened-into-an-approval-request",
+        request(
+            ESCALATING,
+            critics=(HARD_FAIL_REPAIRABLE,),
+            facts=(fact(FactStatus.MISSING, escalatable=True),),
+            repair_iteration=DEFAULT_REPAIR_BUDGET,
+        ),
+        Verdict.DENY,
+        ReasonCode(ReasonName.REPAIR_BUDGET_EXHAUSTED),
+        also_carries=(ReasonCode(ReasonName.FACT_MISSING, FACT),),
+    ),
+    Row(
+        "deny/approval-not-permitted-beats-infrastructure",
+        request(ENFORCING, infrastructure=(ENGINE_DOWN,), approval_required=True),
+        Verdict.DENY,
+        ReasonCode(ReasonName.APPROVAL_NOT_PERMITTED, RULE),
+        also_carries=(ENGINE_DOWN,),
+    ),
+    Row(
+        "deny/approval-not-permitted-beats-an-escalatable-abstention",
+        request(
+            ESCALATING_BUT_NOT_APPROVABLE,
+            facts=(fact(FactStatus.STALE, escalatable=True),),
+            approval_required=True,
+        ),
+        Verdict.DENY,
+        ReasonCode(ReasonName.APPROVAL_NOT_PERMITTED, RULE),
+        also_carries=(ReasonCode(ReasonName.FACT_STALE, FACT),),
+    ),
+    Row(
+        "deny/non-repairable-failure-carries-the-abstentions-it-outranks",
+        request(critics=(HARD_FAIL_FINAL, HARD_UNKNOWN_OTHER)),
+        Verdict.DENY,
+        rule_failed(),
+        also_carries=(ReasonCode(ReasonName.SOLVER_UNKNOWN, OTHER_CRITIC),),
     ),
     Row(
         "deny/over-budget",

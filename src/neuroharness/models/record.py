@@ -32,19 +32,20 @@ from enum import Enum
 from typing import Annotated, Any, Final
 from uuid import UUID
 
-from annotated_types import Ge, Le, MaxLen, MinLen
 from pydantic import (
     AwareDatetime,
     BeforeValidator,
+    Field,
     InstanceOf,
     PlainSerializer,
+    SerializerFunctionWrapHandler,
     StringConstraints,
     field_validator,
     model_serializer,
     model_validator,
 )
 
-from neuroharness.defaults import MAX_REPAIR_BUDGET
+from neuroharness.defaults import MAX_DEMOTE_MODE_WINDOW_SECONDS, MAX_REPAIR_BUDGET
 from neuroharness.models.common import (
     ApprovalState,
     CriticKind,
@@ -133,7 +134,8 @@ _RESOURCE_KEY_PATTERN: Final[str] = (
 )
 _UUID_PATTERN: Final[str] = r"[0-9a-f-]{36}"
 _TOKEN_INVALID_PATTERN: Final[str] = (
-    r"expired|consumed|digest_mismatch|verdict_mismatch|mode_mismatch|bundle_stale|revoked|signature"
+    r"expired|consumed|digest_mismatch|verdict_mismatch"
+    r"|mode_mismatch|bundle_stale|revoked|signature"
 )
 
 #: Names that stand alone; every other name carries a shaped subject.
@@ -249,7 +251,6 @@ MAX_SIGNATURE_LENGTH: Final[int] = 512
 #:
 #: This belongs in :mod:`neuroharness.defaults` alongside the other durations;
 #: it lives here only because that module is frozen for this change.
-MAX_DEMOTE_MODE_WINDOW_SECONDS: Final[int] = 3600
 
 #: Critic families the record schema admits. Rego outcomes are recorded as PDP
 #: rule outcomes, not as critic results, so ``CriticKind.REGO`` has no place
@@ -368,7 +369,7 @@ class ClaimRecord(WireModel):
     value: Scalar
 
     @model_serializer(mode="wrap")
-    def _always_emit_value(self, handler: Any) -> dict[str, Any]:
+    def _always_emit_value(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         """Keep ``value`` present even when null; the schema requires the key."""
         data: dict[str, Any] = handler(self)
         data.setdefault("value", None)
@@ -383,7 +384,7 @@ class EvaluationBatchPosition(WireModel):
     """
 
     batch_id: UUID | None = None
-    batch_index: Annotated[int, Ge(0)] | None = None
+    batch_index: Annotated[int, Field(ge=0)] | None = None
     batch_policy: BatchPolicy | None = None
 
 
@@ -395,7 +396,7 @@ class ExpectedDomain(WireModel):
     instruction channel back into the governed model.
     """
 
-    enum: Annotated[tuple[Scalar, ...], MaxLen(MAX_EXPECTED_ENUM)] | None = None
+    enum: Annotated[tuple[Scalar, ...], Field(max_length=MAX_EXPECTED_ENUM)] | None = None
     min: float | None = None
     max: float | None = None
     relation: ExpectedRelation | None = None
@@ -427,7 +428,7 @@ class Counterexample(WireModel):
 
     property_id: PropertyId
     fields: Annotated[
-        tuple[CounterexampleField, ...], MinLen(1), MaxLen(MAX_COUNTEREXAMPLE_FIELDS)
+        tuple[CounterexampleField, ...], Field(min_length=1, max_length=MAX_COUNTEREXAMPLE_FIELDS)
     ]
     message_code: ReasonCodeField | None = None
 
@@ -461,13 +462,13 @@ class CriticResult(WireModel):
     hard: bool
     effective_mode: Mode
     result: VerifierResult
-    duration_ms: Annotated[float, Ge(0)]
+    duration_ms: Annotated[float, Field(ge=0)]
     would_be_verdict: Verdict | None = None
     repairable: bool | None = None
     counterexample: Counterexample | None = None
     solver_status: SolverStatus | None = None
-    solver_rlimit_used: Annotated[int, Ge(0)] | None = None
-    score: Annotated[float, Ge(0), Le(1)] | None = None
+    solver_rlimit_used: Annotated[int, Field(ge=0)] | None = None
+    score: Annotated[float, Field(ge=0, le=1)] | None = None
 
     @field_validator("kind")
     @classmethod
@@ -528,8 +529,8 @@ class FactRef(WireModel):
     source: SourceName | None = None
     asserted_by: Principal | None = None
     fetched_at: AwareDatetime | None = None
-    age_seconds: Annotated[float, Ge(0)] | None = None
-    max_age_seconds: Annotated[float, Ge(0)] | None = None
+    age_seconds: Annotated[float, Field(ge=0)] | None = None
+    max_age_seconds: Annotated[float, Field(ge=0)] | None = None
 
 
 class Evaluation(WireModel):
@@ -546,23 +547,23 @@ class Evaluation(WireModel):
     action_class: RecordActionClassRef
     session_id: SessionId
     session_root_id: SessionId
-    repair_iteration: Annotated[int, Ge(0), Le(MAX_REPAIR_BUDGET)]
+    repair_iteration: Annotated[int, Field(ge=0, le=MAX_REPAIR_BUDGET)]
     mode: Mode
     policy_bundle: VersionedArtifact
     registry: VersionedArtifact
-    pdp_outcomes: Annotated[tuple[RuleOutcome, ...], MaxLen(MAX_PDP_OUTCOMES)]
-    critic_results: Annotated[tuple[CriticResult, ...], MaxLen(MAX_CRITIC_RESULTS)]
-    facts_used: Annotated[tuple[FactRef, ...], MaxLen(MAX_FACT_REFS)]
-    claims_recorded: Annotated[tuple[ClaimRecord, ...], MaxLen(MAX_CLAIMS_RECORDED)]
+    pdp_outcomes: Annotated[tuple[RuleOutcome, ...], Field(max_length=MAX_PDP_OUTCOMES)]
+    critic_results: Annotated[tuple[CriticResult, ...], Field(max_length=MAX_CRITIC_RESULTS)]
+    facts_used: Annotated[tuple[FactRef, ...], Field(max_length=MAX_FACT_REFS)]
+    claims_recorded: Annotated[tuple[ClaimRecord, ...], Field(max_length=MAX_CLAIMS_RECORDED)]
     verdict: Verdict
-    reason_codes: Annotated[tuple[ReasonCodeField, ...], MaxLen(MAX_REASON_CODES)]
-    latency_ms: dict[LatencyStage, Annotated[float, Ge(0)]]
-    end_to_end_ms: Annotated[float, Ge(0)]
+    reason_codes: Annotated[tuple[ReasonCodeField, ...], Field(max_length=MAX_REASON_CODES)]
+    latency_ms: dict[LatencyStage, Annotated[float, Field(ge=0)]]
+    end_to_end_ms: Annotated[float, Field(ge=0)]
     model_identity: ModelIdentity | None = None
     prior_decision_id: UUID | None = None
     batch: EvaluationBatchPosition | None = None
     counterexamples: (
-        Annotated[tuple[Counterexample, ...], MaxLen(MAX_COUNTEREXAMPLES)] | None
+        Annotated[tuple[Counterexample, ...], Field(max_length=MAX_COUNTEREXAMPLES)] | None
     ) = None
     approval_request_id: UUID | None = None
     monitor_state_ref: StorageRef | None = None
@@ -728,7 +729,7 @@ class ExecutionReceipt(WireModel):
     finished_at: AwareDatetime | None = None
     refusal_reason_code: ReasonCodeField | None = None
     result_digest: Digest | None = None
-    result_size_bytes: Annotated[int, Ge(0)] | None = None
+    result_size_bytes: Annotated[int, Field(ge=0)] | None = None
     result_truncated: bool | None = None
 
     @field_validator("result_tagged_untrusted")
@@ -801,7 +802,7 @@ class Override(WireModel):
     kind: OverrideKind
     target: StorageRef
     authorized_by: Annotated[
-        tuple[Principal, ...], MinLen(1), MaxLen(MAX_AUTHORIZING_PRINCIPALS)
+        tuple[Principal, ...], Field(min_length=1, max_length=MAX_AUTHORIZING_PRINCIPALS)
     ]
     reason_code: ReasonCodeField
     effective_at: AwareDatetime
@@ -866,7 +867,7 @@ class Checkpoint(WireModel):
     anchored externally.
     """
 
-    last_seq: Annotated[int, Ge(0)]
+    last_seq: Annotated[int, Field(ge=0)]
     last_record_hash: Digest
     key_id: KeyId
     signature: Annotated[str, StringConstraints(max_length=MAX_SIGNATURE_LENGTH)]
@@ -913,7 +914,7 @@ class DecisionRecord(WireModel):
 
     record_id: UUID
     tenant_id: TenantId
-    seq: Annotated[int, Ge(0)]
+    seq: Annotated[int, Field(ge=0)]
     prev_record_hash: Digest | None
     record_hash: Digest
     kind: RecordKind
@@ -985,7 +986,9 @@ class DecisionRecord(WireModel):
         return self
 
     @model_serializer(mode="wrap")
-    def _always_emit_prev_record_hash(self, handler: Any) -> dict[str, Any]:
+    def _always_emit_prev_record_hash(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
         """Keep ``prev_record_hash`` present even for the genesis record.
 
         The schema makes it required and nullable. Dropping it under

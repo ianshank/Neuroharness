@@ -32,7 +32,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from neuroharness.canonical.digest import digest_value
+from neuroharness.canonical.digest import SAFE_INTEGER_BOUND, digest_value
 from neuroharness.canonical.jcs import canonical_string, canonicalize
 
 pytestmark = pytest.mark.property
@@ -68,11 +68,19 @@ def json_scalars() -> st.SearchStrategy[Any]:
 
     Non-finite floats are excluded because they are not JSON values at all;
     :mod:`tests.unit.test_jcs` proves they are refused.
+
+    Integers are bounded to the IEEE-754 safe range. That is not a convenience:
+    ``ADR-0021`` narrows the *digest* domain to values a conforming RFC 8785
+    encoder would read identically, so a document carrying a larger integer has
+    no digest to reason about. :mod:`tests.unit.test_digest_integer_bounds`
+    covers the refusal; these properties cover the domain where digests exist.
+    ``canonicalize`` itself is unrestricted and :mod:`tests.unit.test_jcs`
+    exercises it on larger integers.
     """
     return st.one_of(
         st.none(),
         st.booleans(),
-        st.integers(),
+        st.integers(min_value=-SAFE_INTEGER_BOUND, max_value=SAFE_INTEGER_BOUND),
         st.floats(allow_nan=False, allow_infinity=False),
         st.text(),
     )
