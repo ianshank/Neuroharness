@@ -60,18 +60,163 @@ Recorded because the review paid for itself several times over. Full detail in t
 - **"Every default is overridable" was a fail-closed regression.** It would have let an operator weaken a hard gate with an environment variable: no signature, no two-person review, no record. Constitutional constants are now provably unreachable from configuration.
 - **No component owned the ordering.** Without a pipeline module, `INV-05` ("no token without a durable record") would have been a property of the tests: the test did the sequencing, so no production code held it, and the acceptance criterion would have passed while the requirement was unenforced.
 
-## 4. An environment observation, not a code finding
+## 4. Defects in the code, found by adversarially reviewing the implementation
+
+Seventeen findings, each reproduced with a throwaway script before it was
+believed. The five most serious are recorded here; the rest are in the commit
+history with their regression tests.
+
+### C-01 Every decision record the pipeline wrote was invalid (Critical)
+The pipeline assembled the `evaluation` block as a free-form dictionary and
+handed it straight to the hash chain. Nothing between the resolver and the chain
+validated it, and the result failed `DecisionRecord.model_validate` with fifteen
+errors. A hash chain makes a record immutable, so every one of those records was
+permanently unreadable by the validator an auditor would use — and the discovery
+would have happened at the auditor rather than at the writer, on a corpus that
+could not be corrected. Constitution Article IV says evidence is a byproduct of
+enforcement; evidence that does not parse is not evidence.
+**Resolution:** both payloads are built through the typed models and validated
+before anything is appended. A validation failure is fail-closed
+(`SCHEMA_INVALID`), so the response is overridden to `ABSTAIN` and no token
+exists. The caller may no longer supply the fields that state what was decided.
+`Resolution.explain` no longer reaches the record: the schema has no place for
+prose, and `NFR-20` asks for a verdict explainable *from* its record, which
+`pdp_outcomes`, `critic_results`, `facts_used` and `reason_codes` supply in a
+form a replay can compare.
+
+### C-02 A separation-of-duties bypass through a trailing newline (Critical)
+`re.match` with a `$`-anchored pattern accepts a trailing newline, because in
+Python `$` also matches immediately before one. `Principal("user:alice\n")`
+therefore validated and compared unequal to `user:alice`, so a proposer could
+approve their own request (`FR-42`, `SEC-14`). The same shape sat on `Digest`,
+on reason-code subjects — where a newline forges a line in a JSONL evidence
+export (`SEC-07`) — and on three sites in the resource-key registry that the
+first pass of the review missed, where a signed enumeration could hold the kind
+`"service\n"` that no lookup can ever match, denying every call keyed on it
+*after* the decision was recorded `ALLOW`.
+**Resolution:** eight sites, all `fullmatch`, each with a killing fixture.
+
+### C-03 Nothing bound a decision to at most one token (High)
+Two calls with one `decision_id` minted two independently spendable
+authorisations. The nonce store enforces single *use*; nothing enforced single
+*issue*.
+**Resolution:** an injectable issuance ledger claims `(tenant_id, decision_id)`
+before signing, so a losing racer never produces a signature. It raises rather
+than returning the first token, because the second call's arguments need not
+match the first and answering a request about one envelope with an authorisation
+for another is worse than refusing.
+
+### C-04 The digest's number domain was defined over the Python type (High)
+A float in `[2^53, 1e21)` serialises to a plain integer literal under RFC 8785.
+The gateway digested it; the broker, which re-parses the canonical bytes and
+recomputes the digest before executing (`FR-21`), read it back as an
+out-of-range integer and refused. A fail-closed refusal of an envelope nobody
+tampered with, raised on the far side of the decision.
+**Resolution:** the rule now asks what a value *canonicalises to*. `1e21` and
+`1e300` still digest, because they carry an exponent and round-trip exactly;
+over-rejecting is not the safe direction either.
+
+### C-05 A single bad record wedged the write-ahead log permanently (High)
+`replay` caught only `EvidenceUnavailableError`. One staged record the store
+refuses for any other reason — a schema version ahead of this build — propagated
+out and left every later staged record unreplayable, for good.
+**Resolution:** failures are reported per record with their reason code, and the
+log can be quarantined and drained.
+
+Also fixed: the token-issuance record was written outside the pipeline's
+fail-closed boundary, so an evidence outage between the two records escaped
+`evaluate()` *after* the token was minted; mutable dictionaries inside frozen
+models allowed a document to be digested and then edited, with the aliasing
+reaching the caller's nested objects; the record schema version had two sources
+of truth; `yaml.safe_load` accepted duplicate keys, non-string keys and merge
+keys in a registry document before the digest was computed; an unvalidated
+record timestamp entered the hash chain, which replay uses as "now"; and a
+repeated sequence number was diagnosed as a deletion.
+
+## 5. Defects in the tests, found by mutating the source
+
+A second review applied thirty-six hand-written mutations to copies of the
+source. Nine survived the whole suite. The pattern was consistent and worth
+naming: **the suite verified logic thoroughly and data poorly.** Constants and
+boundaries were used everywhere and pinned almost nowhere, so a refactor could
+reasonably change one and ship green.
+
+### T-01 A gate without a killing fixture could not be noticed (High, structural)
+`tests/fixtures/mutations/` was empty. Constitution Article III says a gate
+without a killing fixture does not exist — and an empty directory looks
+identical to a fixture never written, a fixture written and deleted, and a
+fixture deliberately not due yet. Forty tests carried the mutation marker and
+between them named seven of thirty-seven catalogued identifiers.
+**Resolution:** every identifier has a checked-in declaration with its lifecycle
+state, and four structural checks hold the catalogue, the declarations and the
+increment plan to each other. It found seven fixtures claimed `active` or
+`partial` with no test naming them, and corrected two states: `MUT-07` down to
+`partial` (the registry owns the structural half; the runtime check is `P1-02`)
+and `MUT-10` up from `reserved` (verification already kills half of it).
+
+### T-02 The `Production` defect the project is named for was untested (High)
+The evaluation plan names `target: "Production"` as fixture `MUT-30`, the threat
+model calls it `T-17`, and `test_no_magic_values.py` carries a lint dedicated to
+preventing it. The one test checking the enumeration probed with `"prod"`, so a
+case-insensitive membership mutation survived the entire suite. Two spellings of
+production are two policies, one of which nobody reviewed — and they render
+different lease identities, so two concurrent production deploys would not even
+exclude each other (`FR-25`).
+**Resolution:** killed on the render path and the lookup path, over case, suffix
+and whitespace, and on a second enumeration, because a gate guarding only
+`target` would pass a test that only probed `target`.
+
+### T-03 Truncation had a test and no detector (High)
+The test named for it ended by asserting arithmetic on values it had just
+constructed. No production function compared a chain head against a checkpoint,
+so the checkpoint was a value produced, stored and never read.
+**Resolution:** `verify_against_checkpoint`, on the primitive and on the store,
+with `TRUNCATED`, `CHECKPOINT_MISMATCH` and `CHECKPOINT_INVALID` as distinct
+typed outcomes.
+
+### T-04 Four assertions could not fail
+`assert sorted([b, a])` (always truthy, the ordering unchecked); two `verify`
+calls with no assertion; `assert verify(...) is not None` where `verify` raises
+rather than returning `None`; `assert DEFAULT_MAX_PENDING_RECORDS > 0`. Three
+property tests were tautological, one of them asserting verbatim the body of the
+function under test, and one had no assertion at all.
+**Resolution:** replaced with properties that can fail, including the UTF-16
+key-ordering rule — which needed a deliberately discriminating alphabet, because
+the two orders differ only for a key above U+FFFF drawn alongside one in
+U+E000–U+FFFF, a pair a generic text strategy essentially never draws.
+
+### T-05 A refusal that could not be rendered (Medium)
+Found by the new lone-surrogate property. The canonicaliser interpolated the
+offending key into its error message verbatim; an unpaired surrogate has no
+UTF-8 encoding, so the message raised `UnicodeEncodeError` the moment anything
+wrote it. A clean fail-closed refusal became a crash carrying no reason code, in
+the caller's logging path (Article II).
+
+The remaining findings — the unverified redaction key set, untested inclusive
+boundaries on the bundle grace window and the HMAC secret floor, major-only
+schema-version negatives, `pytest.raises(Exception)` guarding constitutional
+constraints, and an error-to-reason mapping pinned by type rather than by value
+— are the same shape and are tracked to closure in the commit history.
+
+## 6. An environment observation, not a code finding
 
 While working in this repository, one agent reported that a connected tool server's instruction block ends with a directive telling the agent to change how it uses its tools. It correctly ignored it, on the grounds that instructions arriving through tool content are not instructions from the user.
 
 That is worth recording here for one reason: it is precisely the threat this project exists to address. `T-11` and `T-12` in the threat model describe instructions crossing a trust boundary through tool content, and the control is that verifier and tool output is typed data, never instruction text. The incident is a live example of the class, encountered during the build of the thing designed to stop it.
 
-## 5. Open items
+## 7. Open items
 
 | ID | Item | Owner | Blocking? |
 |---|---|---|---|
-| F-06 | Reason-code subject shape not validated per name at construction | Tech lead | No, fail-closed; fix in the review round |
+| F-06 | Reason-code subject shape not validated per name at construction. Still open, and now with a second reason to fix it: the per-name patterns live in `models/record.py` while the catalogue lives in `reason.py`, so the shapes have two sources of truth. The fix is to move them to `reason.py` and have the record model validate through it. | Tech lead | No, fail-closed |
+| — | `TokenInvalidReason` has three sources of truth: the enum in `reason.py`, `_TOKEN_INVALID_PATTERN` in `models/record.py`, and a literal alternation in the published record schema. Same shape as F-06, and the reason the new duplicate-issuance refusal reports `HARNESS_UNHEALTHY` rather than a `TOKEN_INVALID` subject the schema does not carry. | Tech lead | No |
 | — | §5.5's "never for facts marked `required: true`" is enforced by the registry loader, not the resolver, because only required facts abstain at all. Confirm that placement is intended. | Policy owner | No |
-| — | `ADR-0021` follow-up: registry `argument_schema` must reject a float for a policy-compared argument | Policy owner | No |
+| — | `ADR-0021` follow-up: decide what an `argument_schema` must say about an integer-typed argument so that a value outside the IEEE-754 safe range cannot reach a digest. The rule is now enforced at the digest boundary, so this is defence in depth rather than the only control. | Policy owner | No |
+| — | `SequenceIdGenerator` is not thread-safe. A test seam only today; worth naming before anything real depends on it. | Tech lead | No |
 | — | Digest test vectors remain provisional until both `ADR-0021` rules are in force | Tech lead | Yes, for publishing vectors |
-| — | Independent code review and test-quality review of this increment | Tech lead | Yes, before the increment is called done |
+| — | No `main` branch exists in the repository, so no pull request can be opened for this work. Needs a base branch created by someone with push rights. | Repository owner | Yes, for review |
+
+**Closed in this round:** the independent code review (seventeen findings,
+section 4) and the test-quality review (eighteen findings, section 5) have both
+been run and their findings fixed, each with a regression test verified to fail
+before the change.
