@@ -1,0 +1,188 @@
+{
+  "note": "Every hard critic declared `mode: enforce` in a registry this build loads, and the `active` mutation fixture Constitution Article IV says it cannot exist without. Each entry below is a hard gate the registry claims and no fixture proves. The count is published so a green `hard-rules-have-fixtures` check reads as \"the register is consistent\" and never as \"Article IV is satisfied\". The list may only shrink: a critic leaves it by moving to `covered` with a fixture that is declared `active`, and a hard enforcing critic that appears in neither list fails the check. Every entry currently carries at least one candidate fixture; before the change that landed this register, four of the seventeen had no catalogue identifier at all (`WF-05`, `WF-06b`, `WF-06c` and the typed contract), which is why `MUT-37`, `MUT-38`, `MUT-39` and `MUT-08b` were reserved alongside it.",
+  "gap_count": 17,
+  "gaps": [
+    {
+      "critic_id": "pdp.deploy.allowlist",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/deploy_service",
+      "source_requirement": "WF-01",
+      "candidate_fixtures": [
+        "MUT-01"
+      ],
+      "owed_by": "P1-15"
+    },
+    {
+      "critic_id": "pdp.deploy.production-approval",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/deploy_service",
+      "source_requirement": "WF-02",
+      "candidate_fixtures": [
+        "MUT-02"
+      ],
+      "owed_by": "P1-15",
+      "note": "MUT-34 is active and names FR-45, but it proves the resolver refuses approval on a non-approvable class; it says nothing about whether this rule blocks an unapproved production target."
+    },
+    {
+      "critic_id": "pdp.deploy.delegation",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/deploy_service",
+      "source_requirement": "WF-03",
+      "candidate_fixtures": [
+        "MUT-03",
+        "MUT-25"
+      ],
+      "owed_by": "P1-15"
+    },
+    {
+      "critic_id": "pdp.deploy.ci-evidence",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/deploy_service",
+      "source_requirement": "WF-04",
+      "candidate_fixtures": [
+        "MUT-05",
+        "MUT-23"
+      ],
+      "owed_by": "P1-15",
+      "note": "MUT-04 is deliberately not listed: a missing CI fact abstains in the fact layer (P1-18) before this rule is consulted, so killing it would not show this rule blocks."
+    },
+    {
+      "critic_id": "pdp.deploy.change-record",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/deploy_service",
+      "source_requirement": "WF-05",
+      "candidate_fixtures": [
+        "MUT-37"
+      ],
+      "owed_by": "P1-15"
+    },
+    {
+      "critic_id": "pdp.deploy.change-window",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/deploy_service",
+      "source_requirement": "WF-06b",
+      "candidate_fixtures": [
+        "MUT-38"
+      ],
+      "owed_by": "P1-15"
+    },
+    {
+      "critic_id": "pdp.deploy.in-flight",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/deploy_service",
+      "source_requirement": "WF-06c",
+      "candidate_fixtures": [
+        "MUT-39"
+      ],
+      "owed_by": "P1-15",
+      "note": "01-specification.md section 3.5 puts WF-06c inside P1-15; the P1-15 row in 03-work-breakdown.md scopes the policy pack to WF-01 to WF-05 and WF-06b and omits it. No task owns this rule until that contradiction is resolved. MUT-31 covers the broker lease, which is the other half of WF-06c, not this one."
+    },
+    {
+      "critic_id": "smt.version-contract",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/deploy_service",
+      "source_requirement": "01-specification.md#3.5-typed-contract",
+      "candidate_fixtures": [
+        "MUT-08",
+        "MUT-08b"
+      ],
+      "owed_by": "P2-01"
+    },
+    {
+      "critic_id": "effect.deploy-state",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/deploy_service",
+      "source_requirement": "FR-57",
+      "candidate_fixtures": [
+        "MUT-32"
+      ],
+      "owed_by": "P2-11"
+    },
+    {
+      "critic_id": "pdp.rollback.allowlist",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/rollback",
+      "source_requirement": "WF-01",
+      "candidate_fixtures": [
+        "MUT-01"
+      ],
+      "owed_by": "P1-15"
+    },
+    {
+      "critic_id": "pdp.rollback.approval",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/rollback",
+      "source_requirement": "WF-02",
+      "candidate_fixtures": [
+        "MUT-02"
+      ],
+      "owed_by": "P1-15"
+    },
+    {
+      "critic_id": "pdp.rollback.delegation",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/rollback",
+      "source_requirement": "WF-03",
+      "candidate_fixtures": [
+        "MUT-03",
+        "MUT-25"
+      ],
+      "owed_by": "P1-15"
+    },
+    {
+      "critic_id": "pdp.rollback.ci-evidence",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/rollback",
+      "source_requirement": "WF-04",
+      "candidate_fixtures": [
+        "MUT-05",
+        "MUT-23"
+      ],
+      "owed_by": "P1-15"
+    },
+    {
+      "critic_id": "pdp.rollback.in-flight",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/rollback",
+      "source_requirement": "WF-06c",
+      "candidate_fixtures": [
+        "MUT-39"
+      ],
+      "owed_by": "P1-15",
+      "note": "Same unowned rule as pdp.deploy.in-flight, in the destructive class."
+    },
+    {
+      "critic_id": "smt.rollback-contract",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/rollback",
+      "source_requirement": "01-specification.md#3.5-typed-contract",
+      "candidate_fixtures": [
+        "MUT-08",
+        "MUT-08b"
+      ],
+      "owed_by": "P2-01"
+    },
+    {
+      "critic_id": "effect.rollback-state",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.apply/rollback",
+      "source_requirement": "FR-57",
+      "candidate_fixtures": [
+        "MUT-32"
+      ],
+      "owed_by": "P2-11"
+    },
+    {
+      "critic_id": "pdp.status.allowlist",
+      "registry": "tests/fixtures/registry/reference_deploy_registry.json",
+      "action_class": "deployment.status/get_status",
+      "source_requirement": "WF-01",
+      "candidate_fixtures": [
+        "MUT-01"
+      ],
+      "owed_by": "P1-15",
+      "note": "A third class declaring the same allowlist rule. One active fixture would move all three entries out of gaps, so promoting MUT-01 needs a reviewer to confirm it exercises each class rather than one."
+    }
+  ],
+  "covered": []
+}

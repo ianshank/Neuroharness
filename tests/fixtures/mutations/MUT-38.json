@@ -1,0 +1,8 @@
+{
+  "id": "MUT-38",
+  "state": "reserved",
+  "phase": 1,
+  "gate": "WF-06b change window",
+  "mutation": "Token issue attempted outside the class's declared change window on the trusted clock",
+  "expected": "DENY RULE_FAILED:WF-06b"
+}

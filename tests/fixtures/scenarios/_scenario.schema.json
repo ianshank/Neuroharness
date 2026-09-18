@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neuroharness.dev/schemas/acceptance-scenario-declaration/v1",
+  "title": "Acceptance scenario declaration",
+  "description": "One acceptance scenario from section 8 of docs/sdd/01-specification.md, and what currently executes it. Constitution Article VII says acceptance scenarios are written before the code they accept, and asks of every change which scenario accepts it. A specification can carry forty-five of them while three are executed and nothing says so, because a scenario that is merely written looks exactly like a scenario that is met. These declarations are what make the difference visible: each scenario is either `referenced` by a named test or `not_executable` with the task that owes it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "state"],
+  "properties": {
+    "id": {
+      "description": "The scenario identifier. Must appear as a `Scenario:` line in the specification.",
+      "type": "string",
+      "pattern": "^A-[0-9]{2}[a-z]?$"
+    },
+    "title": {
+      "description": "The scenario's own title, copied from the specification so a renamed scenario shows up as a diff here rather than drifting silently.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "state": {
+      "description": "'referenced': a test names this scenario, so a reader can go from the scenario to the code that accepts it. 'not_executable': the components the scenario drives do not exist yet, and `owed_by` names the task that will build them. There is deliberately no third state: 'planned', 'partial' or 'covered elsewhere' would each be a way to stop counting a scenario without executing it.",
+      "enum": ["referenced", "not_executable"]
+    },
+    "referenced_by": {
+      "description": "Required on 'referenced': the tests that name this scenario, as `path::test_name`. Checked - each test must exist and its source must actually name the scenario, because a declaration that points at a test which never mentions it is the exact failure this registry exists to catch.",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^tests/[^:]+\\.py::[A-Za-z0-9_]+$" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "owed_by": {
+      "description": "Required on 'not_executable': the work-breakdown task that must exist before this scenario can be executed at all. A scenario owed by nobody is a scenario nobody will write.",
+      "type": "string",
+      "pattern": "^P[0-4]-[0-9]{2}[a-z]?$"
+    },
+    "note": {
+      "description": "Anything a reader needs that the fields above cannot carry - which half of a scenario is blocked, or which fixture covers the same ground from another angle.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 400
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "referenced" } }, "required": ["state"] },
+      "then": {
+        "required": ["referenced_by"],
+        "not": { "required": ["owed_by"] }
+      }
+    },
+    {
+      "if": { "properties": { "state": { "const": "not_executable" } }, "required": ["state"] },
+      "then": {
+        "required": ["owed_by"],
+        "not": { "required": ["referenced_by"] }
+      }
+    }
+  ]
+}

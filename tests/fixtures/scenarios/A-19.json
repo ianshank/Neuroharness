@@ -1,0 +1,8 @@
+{
+  "id": "A-19",
+  "title": "Unregistered action class abstains in strict mode (FR-31)",
+  "state": "referenced",
+  "referenced_by": [
+    "tests/unit/test_registry_loader.py::test_unregistered_class_abstains_under_strict"
+  ]
+}

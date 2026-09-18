@@ -1,0 +1,7 @@
+{
+  "id": "A-30",
+  "title": "Halted class denies everything (MUT-19)",
+  "state": "not_executable",
+  "owed_by": "P1-09",
+  "note": "The halted-class denial is exercised by a killing fixture already; no test names the scenario, and the scenario also asserts that no token is issued."
+}

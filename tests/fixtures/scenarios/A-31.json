@@ -1,0 +1,7 @@
+{
+  "id": "A-31",
+  "title": "Token verdict or mode mismatch is refused (MUT-20)",
+  "state": "not_executable",
+  "owed_by": "P1-07",
+  "note": "The token service refuses the mismatch today; the scenario is written from the broker's side."
+}

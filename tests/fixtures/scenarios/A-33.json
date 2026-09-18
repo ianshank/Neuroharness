@@ -1,0 +1,6 @@
+{
+  "id": "A-33",
+  "title": "Batch member depending on a denied member is denied (MUT-28)",
+  "state": "not_executable",
+  "owed_by": "P2-10"
+}

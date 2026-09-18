@@ -25,3 +25,5 @@ Format: [MADR](https://adr.github.io/madr/) (Context → Decision → Alternativ
 | [ADR-0019](ADR-0019-implementation-stack-revision.md) | Implementation stack revision: key algorithm, solver bounding, Prolog deferral | Proposed (supersedes 0009) | Round 2 `R2-D5`, `R2-D16`, `R2-D17` |
 | [ADR-0020](ADR-0020-proposal-digest-field-set.md) | The proposal digest covers a fixed, narrow projection | Proposed (amends 0015) | Increment-1 review |
 | [ADR-0021](ADR-0021-canonical-number-encoding.md) | Exact integers in canonicalisation, with a rule that makes the deviation unreachable | Proposed | Raised by implementation |
+| [ADR-0022](ADR-0022-fact-provider-anti-laundering.md) | The anti-laundering relation is derived from action-class writes, not enumerated per provider | Proposed | Increment-2 `D-2` (`P0-06`) |
+| [ADR-0023](ADR-0023-one-resource-key-grammar.md) | One resource-key grammar, owned by the registry and rendered into everything else | Proposed | Increment-2 `D-1` |

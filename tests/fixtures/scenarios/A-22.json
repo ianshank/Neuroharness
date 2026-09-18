@@ -1,0 +1,6 @@
+{
+  "id": "A-22",
+  "title": "Trusted clock unavailable abstains any evaluation with a required fact (NFR-13)",
+  "state": "not_executable",
+  "owed_by": "P1-11"
+}

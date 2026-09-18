@@ -1,0 +1,7 @@
+{
+  "id": "A-12b",
+  "title": "Bundle integrity failure never executes (MUT-12b)",
+  "state": "not_executable",
+  "owed_by": "P1-11",
+  "note": "Needs a policy decision point holding a signed bundle (P1-04)."
+}

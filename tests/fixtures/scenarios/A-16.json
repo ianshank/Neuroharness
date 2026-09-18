@@ -1,0 +1,10 @@
+{
+  "id": "A-16",
+  "title": "Shadow mode records but never blocks on the verdict (MUT-16)",
+  "state": "referenced",
+  "referenced_by": [
+    "tests/unit/test_registry_loader.py::test_loader_accepts_a_shadow_class_that_still_has_enforcing_critics",
+    "tests/unit/test_registry_models.py::test_rule_c_admits_an_enforcing_critic_inside_a_shadow_class",
+    "tests/unit/test_registry_models.py::test_mode_rank_orders_enforcement_without_constraining_critics"
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "id": "A-01",
+  "title": "Undeclared tool is denied (WF-01, MUT-01)",
+  "state": "not_executable",
+  "owed_by": "P1-15"
+}

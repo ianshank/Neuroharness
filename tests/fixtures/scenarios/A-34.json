@@ -1,0 +1,7 @@
+{
+  "id": "A-34",
+  "title": "Evidence asserted by the delegation chain is not evidence (SEC-11, MUT-23)",
+  "state": "not_executable",
+  "owed_by": "P1-18",
+  "note": "Needs a fact carrying asserted_by, which is the fact-provider interface."
+}

@@ -1,0 +1,7 @@
+{
+  "id": "A-39",
+  "title": "Single-principal demotion is rejected (FR-48, MUT-26)",
+  "state": "not_executable",
+  "owed_by": "P1-10a",
+  "note": "The override needs principals, which needs session data."
+}

@@ -1,0 +1,8 @@
+{
+  "id": "MUT-08b",
+  "state": "reserved",
+  "phase": 2,
+  "gate": "Typed contract",
+  "mutation": "Version tuple the declared contract forbids (downgrade across a major boundary)",
+  "expected": "DENY RULE_FAILED:smt.version-contract"
+}

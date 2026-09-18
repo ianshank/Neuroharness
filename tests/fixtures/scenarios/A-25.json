@@ -1,0 +1,7 @@
+{
+  "id": "A-25",
+  "title": "Happy-path staging deployment (positive)",
+  "state": "not_executable",
+  "owed_by": "P1-26",
+  "note": "A positive scenario: it needs an agent, a connector and a staging target, not a gate."
+}

@@ -83,6 +83,7 @@ Every fixture is a checked-in envelope or trajectory plus an expected verdict/re
 | `MUT-06` | `WF-06a` temporal | Approval piggybacking: approval for a different proposal digest | `REQUIRES_APPROVAL APPROVAL_REQUIRED:WF-02`, no token | 1 |
 | `MUT-07` | Schema | Extra/malformed argument | `SCHEMA_INVALID`, no evaluation | 1 |
 | `MUT-08` | Solver uncertainty | Contract forced to timeout / unsupported theory | `ABSTAIN SOLVER_*` | 2 |
+| `MUT-08b` | Typed contract | Version tuple the declared contract forbids (downgrade across a major boundary) | `DENY RULE_FAILED:smt.version-contract` | 2 |
 | `MUT-09` | Token single-use | Replay consumed token | Broker refuses `TOKEN_INVALID`; alert | 1 |
 | `MUT-10` | Token digest binding | Modify envelope after `ALLOW` | Broker refuses `TOKEN_INVALID` | 1 |
 | `MUT-11` | Approval binding | Repair after approval requested; then approve old request | Superseded; no token | 1 |
@@ -113,8 +114,13 @@ Every fixture is a checked-in envelope or trajectory plus an expected verdict/re
 | `MUT-35` | `FR-93` rate limit | Eleventh new action in one hour for one session root | `DENY REPAIR_RATE_LIMITED` | 2 |
 | `MUT-36` | `FR-21` revocation | Revoked token presented | `TOKEN_INVALID:revoked` | 1 |
 | `MUT-24` | `WF-06a` monitor precedence | Trajectory with `executed(P)` and no preceding `approval_granted(P)` | Monitor `FAIL`; `DENY MONITOR_VIOLATION:WF-06a` once certified (shadow-kill until then) | 3 |
+| `MUT-37` | `WF-05` change record | Production target whose change-approval fact is bound to a different `(service, version, target)` | `DENY RULE_FAILED:WF-05` | 1 |
+| `MUT-38` | `WF-06b` change window | Token issue attempted outside the class's declared change window on the trusted clock | `DENY RULE_FAILED:WF-06b` | 1 |
+| `MUT-39` | `WF-06c` mutual exclusion | Second deployment proposed while a fresh `deploy_state` fact reports one in flight for the same `(service, target)` | `DENY RULE_FAILED:WF-06c` | 1 |
 
-`MUT-02` is split: `MUT-02` (approvable class → `REQUIRES_APPROVAL APPROVAL_REQUIRED:WF-02`) and `MUT-34` (non-approvable → `DENY`). `MUT-12` is split into `MUT-12` (engine unreachable) and `MUT-12b` (bundle integrity). `MUT-08` expects exactly `SOLVER_TIMEOUT:smt.version-contract`; no wildcards. `MUT-24` covers the Phase 3 monitor precedence property and is evaluated as a shadow kill (recorded `would_be_verdict` = `DENY`) while the monitor is advisory.
+`MUT-02` is split: `MUT-02` (approvable class → `REQUIRES_APPROVAL APPROVAL_REQUIRED:WF-02`) and `MUT-34` (non-approvable → `DENY`). `MUT-12` is split into `MUT-12` (engine unreachable) and `MUT-12b` (bundle integrity); `MUT-08` is split the same way into `MUT-08` (the solver cannot answer) and `MUT-08b` (the contract is answered and violated). `MUT-08` expects exactly `SOLVER_TIMEOUT:smt.version-contract`; no wildcards. `MUT-24` covers the Phase 3 monitor precedence property and is evaluated as a shadow kill (recorded `would_be_verdict` = `DENY`) while the monitor is advisory.
+
+`MUT-08b`, `MUT-37`, `MUT-38` and `MUT-39` exist because the register in `tests/fixtures/hard_rule_gaps.json` found four hard `mode: enforce` critics in the loaded registry whose `source_requirement` had no catalogue row at all - `01-specification.md#3.5-typed-contract`, `WF-05`, `WF-06b` and `WF-06c`. A gap with no identifier cannot be counted, so it cannot be closed; reserving the identifier is what makes the absence countable. `MUT-39` is the policy half of `WF-06c` and `MUT-31` is the broker-lease half (`ADR-0017`): the two are not substitutes, because a stale `deploy_state` fact and a lost lease fail in different places.
 
 Additional fixtures are added whenever a hard rule, critic or failure path is added (`INV-07`). Bypass-exercise findings (`P2-09`, `P4-05`) are numbered from `MUT-40` onward as they are discovered.
 

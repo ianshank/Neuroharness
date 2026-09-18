@@ -1,0 +1,6 @@
+{
+  "id": "A-38",
+  "title": "Effect mismatch is recorded and blocks the next action on the resource (FR-57, MUT-32)",
+  "state": "not_executable",
+  "owed_by": "P2-11"
+}

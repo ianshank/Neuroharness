@@ -1,0 +1,40 @@
+# ADR-0022: The anti-laundering relation is derived from action-class writes, not enumerated per provider
+
+**Status:** Proposed · **Date:** 2026-09-18 · **Deciders:** Tech lead, Security lead (**unnamed**; see Consequences) · **Relates to:** ADR-0015, ADR-0017 · **Origin:** `08-increment-2-plan.md` §4.1 and decision `D-2`; written with `docs/sdd/09-fact-provider-specification.md` (`P0-06`)
+
+## Context
+`SEC-11` and threat `T-21` name the failure the evidence layer exists to prevent: the agent uses a permitted tool to write to the system an evidence provider reads — approves its own change ticket, triggers a trivial CI run — and the provider then returns an authentic, fresh, correctly-signed fact. Every control is green and the action is self-authorized. Constitution Art. I states the same thing as a property: evidence the agent can manufacture through its own tools is not evidence.
+
+`SEC-11` gives two tiers. Either the backing system of an evidence provider is not writable by any tool registered for the same tenant, or facts carry `asserted_by` and rules require `asserted_by ∉ delegation_chain ∪ {agent_id}`. Choosing the tier requires a machine-readable statement of *which tools write where*. Nothing in the repository carries that statement: `02-technical-plan.md:152` describes the control in prose, `FR-14`'s registry field list stops at `backing system`, and `src/neuroharness/registry/models.py:189-235` has no field on `ActionClass` that names a written system.
+
+That gap is why `P0-06` blocks `P1-18` rather than merely preceding it. `MUT-23` is the killing fixture for `SEC-11`, and a fact layer built before this decision would have `MUT-23`'s gate defined by whatever the code happened to do — the inversion `05-evaluation-plan.md` §1a exists to prevent.
+
+## Decision
+The relation is **derived from action-class writes**.
+
+1. Every fact-provider registry entry carries a required `backing_system`, an enum over a closed `backing_systems[].id` list declared once in the same document.
+2. Every action class carries a required `writes_to`: an array of `backing_systems[].id`. Required, not defaulted — an empty array is a positive assertion that this tool writes to no system any provider reads. A class whose `effect_class` is `none` or `read` must declare `writes_to: []`.
+3. The registry loader derives `tenant_writes = ⋃ { A.writes_to : A ∈ action_classes }` over the **whole** action-class registry, and for every action class `C`, every `f ∈ C.required_facts` and `P = providers[f.name]` refuses the registry unless
+
+   ```
+   P.backing_system ∉ tenant_writes                              # SEC-11 tier 1
+   or (P.asserts_principal = true and P.trust_level ≠ "advisory") # SEC-11 tier 2
+   ```
+
+   Refusal is `REGISTRY_INTEGRITY_FAILED` → `ABSTAIN`, a non-escalating infrastructure reason (`01-specification.md` §5.5).
+4. `backing_systems[].writable_by_harness_tools` is a declared expectation that the loader audits against the derived answer; disagreement refuses the registry.
+5. Where tier 2 applies, the fact is delivered fresh, carrying `asserted_by`, and a hard policy rule denies when `asserted_by ∈ context.actor.chain_principals ∪ {agent_id}`. The harness does **not** reclassify the fact's status.
+
+## Alternatives considered
+- **Enumerate the writing tools on each provider entry** (`written_by_tools: ["ci.trigger_build", …]`), the other `D-2` option. Rejected, and it is the closer call than it looks: it needs no action-class schema change, no ADR of its own and no fixture migration, and a reviewer can read the whole control for one provider on one screen. It loses on the failure mode. The correct update lives in a file the change does not touch, made by someone who is not in the review: an engineer registering a new tool that writes to CI knows it writes to CI; the author of the `ci_result` provider entry, six months earlier, does not know the tool exists. When the list is not updated, the loader keeps accepting the registry, every gate stays green, and laundering becomes possible **without any document changing**. A control that is believed to be in force and is not is worse than one that is visibly missing — the same argument `05-evaluation-plan.md` §1a makes for `partial` fixtures and `02-technical-plan.md` §4.4's loader makes for inert `escalate_on`.
+- **Compute `tenant_writes` per principal**, over only the classes the proposing chain may currently dispatch. Rejected: `SEC-11` says "any tool registered for the same tenant", and a per-principal computation makes a load-time integrity property depend on an authorization model evaluated later that can change without a registry reload.
+- **Reclassify a laundered fact to `PROVIDER_ERROR` or `MISSING`** so the harness blocks without a policy rule. Rejected because it is *less* safe: it moves the verdict from `DENY RULE_FAILED:WF-04` to `ABSTAIN`, which is down the safety order (`src/neuroharness/resolve/safety.py:57-63`), and an abstention on an escalatable fact in an approvable class may escalate to `REQUIRES_APPROVAL` (`01-specification.md` §5.5). Detected laundering would end in a human approval queue instead of a denial.
+- **Add a `TAINTED` fact status** so the taint is visible in the envelope. Rejected for v1: `FactStatus` is a frozen four-member enum reproduced in `docs/sdd/schemas/action-envelope.schema.json`, and widening a published contract to express something a hard rule already expresses buys nothing `MUT-23` does not already kill.
+- **Leave the clause as prose and let the implementer decide.** Rejected by Art. VII and by `08-increment-2-plan.md` §1: it cannot be derived by an engineer at implementation time, and it is the reason `P0-06` is a blocker rather than documentation.
+
+## Consequences
+- Positive: a new tool that writes to an evidence system is caught by the loader on the change that introduces it, in front of the person who can fix it, instead of by an audit nobody schedules. The control is self-maintaining and cannot go stale silently. `writes_to` also gives `P1-18` and `P2-11` a machine-readable write inventory the effect verifier (`FR-57`) can reuse.
+- Negative: **this is a registry schema change.** `writes_to` is a new required field on `ActionClass`; `FR-30`'s field list and `02-technical-plan.md` §4.4's example gain it; `tests/fixtures/registry/reference_deploy_registry.json` and every derived fixture gain it; and the loader gains a required-field failure that existing signed registries will hit on upgrade. Under `SEC-06` and `06-delivery-and-governance.md` §10 (`:142`) that change needs two-person review including the security lead.
+- Negative: the derived relation is complete only over *governed* writes — tools dispatched through the broker, which holds the only tool credentials (`SEC-02`). A CI job token, a human with the same permissions, or an agent outside this harness is invisible to it. That residual is `09-fact-provider-specification.md` §8's named gap; it is carried by `backing_systems[].isolation_evidence` and accepted, if at all, in `P0-07`.
+- **Acceptance requires a named security owner, and there is not one.** `06-delivery-and-governance.md:95` is titled *"RACI (to be confirmed in `P0-12`)"*; `OQ-10` — named workflow owner, second security reviewer, compliance contact, agent-developer contact — is open. `SEC-06` requires two-person review for a hard-gate change and this is one. `P0-12` has not supplied the second name, so this ADR stays **Proposed**, and `08-increment-2-plan.md` risk `R-B` is the record of why. Until it closes, `09-fact-provider-specification.md` §8's conservative default holds: no `isolation_evidence` can be validly attested, so every provider is treated as tier 2.
+- Follow-ups: `FR-14` and `FR-30` amended to carry `backing_system` and `writes_to`; `09-fact-provider-specification.md` §§2, 6, 7 are the normative form; `P1-18` owes a mutation-matrix declaration for the load-time refusal before it lands check C3 (Art. IV); `ADR-0011` still owes the reference-workflow file this document's §7 examples assume.

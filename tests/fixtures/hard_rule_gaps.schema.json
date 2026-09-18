@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neuroharness.dev/schemas/hard-rule-gap-register/v1",
+  "title": "Hard-rule fixture register",
+  "description": "The checked-in register of hard `mode: enforce` critics that have no `active` mutation fixture, and of the ones that have gained one. Constitution Article IV says every hard rule in the registry must ship with a killing fixture; governance section 3 stage 4 says CI must check it. Today that property is false for most of the loaded registry, and the honest way to hold a false property is to count it rather than to name a green check after it. Every hard enforcing critic in every registry the build loads appears exactly once, in `gaps` or in `covered`. A critic in neither fails the check, which is what makes a newly added hard rule loud. A critic in `gaps` whose candidate fixture has become `active` also fails, which is what makes the register shrink-only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "note",
+    "gap_count",
+    "gaps",
+    "covered"
+  ],
+  "properties": {
+    "note": {
+      "description": "Why this file exists, for a reader who arrives at it from a red check.",
+      "type": "string",
+      "minLength": 1
+    },
+    "exemption": {
+      "description": "Stage 4 is the one CI stage whose specification says no manual override exists, so the register itself is an exemption and needs an ADR the way a retired fixture does (increment-2 plan section 5.5, decision D-8). Absent until that ADR is written; the checker reports its absence rather than failing, because failing would delete the count.",
+      "type": "string",
+      "pattern": "^ADR-[0-9]{4}$"
+    },
+    "gap_count": {
+      "description": "The number of entries in `gaps`, restated so the count is data the CI job can print. A green `hard-rules-have-fixtures` check with a non-zero count here means the register is consistent, not that Article IV is satisfied.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "gaps": {
+      "description": "Hard enforcing critics with no `active` fixture. May only shrink.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/gap"
+      }
+    },
+    "covered": {
+      "description": "Hard enforcing critics that have gained an `active` fixture. An entry moves here from `gaps`, and only with a fixture a reviewer has confirmed exercises this critic's class.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/covered"
+      }
+    }
+  },
+  "$defs": {
+    "critic_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "fixture_id": {
+      "type": "string",
+      "pattern": "^MUT-[0-9]{2,3}[a-z]?$"
+    },
+    "task_id": {
+      "description": "A work-breakdown task identifier from docs/sdd/03-work-breakdown.md.",
+      "type": "string",
+      "pattern": "^P[0-4]-[0-9]{2}[a-z]?$"
+    },
+    "location": {
+      "type": "object",
+      "required": [
+        "critic_id",
+        "registry",
+        "action_class",
+        "source_requirement"
+      ],
+      "properties": {
+        "critic_id": {
+          "$ref": "#/$defs/critic_id"
+        },
+        "registry": {
+          "description": "Repository-relative path of the registry document the critic was read from. Named per entry because the check is keyed on every registry the build loads, not on one fixture file: a hard critic added to a second registry must be as visible as one added to the first.",
+          "type": "string",
+          "minLength": 1
+        },
+        "action_class": {
+          "description": "The `tool/intent` pair that declares the critic. One rule identifier can appear in several classes, and a fixture that kills it in one class has not been shown to kill it in another.",
+          "type": "string",
+          "pattern": "^[^/]+/[^/]+$"
+        },
+        "source_requirement": {
+          "description": "The critic's declared `source_requirement`, copied from the registry. Checked against the loaded registry, so a renamed requirement shows up here rather than silently detaching the rule from the rule it encodes.",
+          "type": "string",
+          "minLength": 1
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "description": "The fields both lists share: which critic, in which registry document, in which action class, encoding which requirement. `unevaluatedProperties: false` is applied by the two composed definitions rather than here, because `additionalProperties` at this level cannot see the fields the composing schema adds and would reject every entry."
+    },
+    "gap": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/location"
+        },
+        {
+          "type": "object",
+          "required": [
+            "candidate_fixtures",
+            "owed_by"
+          ],
+          "properties": {
+            "candidate_fixtures": {
+              "description": "The catalogued fixtures that would prove this critic blocks - fixtures whose `expected` names this rule, not every fixture that touches the same requirement. Empty means the catalogue has no fixture for this rule at all, which is the deeper gap: an absence with no identifier cannot be counted. `note` is then required to say so.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/fixture_id"
+              },
+              "uniqueItems": true
+            },
+            "owed_by": {
+              "$ref": "#/$defs/task_id"
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "candidate_fixtures": {
+                "maxItems": 0
+              }
+            },
+            "required": [
+              "candidate_fixtures"
+            ]
+          },
+          "then": {
+            "required": [
+              "note"
+            ]
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "covered": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/location"
+        },
+        {
+          "type": "object",
+          "required": [
+            "proving_fixtures"
+          ],
+          "properties": {
+            "proving_fixtures": {
+              "description": "The fixtures that prove this critic blocks. At least one must be declared `active`, or the entry is a claim with nothing behind it.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/fixture_id"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

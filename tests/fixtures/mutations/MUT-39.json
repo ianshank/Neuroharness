@@ -1,0 +1,8 @@
+{
+  "id": "MUT-39",
+  "state": "reserved",
+  "phase": 1,
+  "gate": "WF-06c mutual exclusion",
+  "mutation": "Second deployment proposed while a fresh deploy_state fact reports one in flight for the same (service, target)",
+  "expected": "DENY RULE_FAILED:WF-06c"
+}

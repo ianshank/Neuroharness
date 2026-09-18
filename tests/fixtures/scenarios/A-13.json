@@ -1,0 +1,7 @@
+{
+  "id": "A-13",
+  "title": "Audit write failure blocks token issuance (MUT-13)",
+  "state": "not_executable",
+  "owed_by": "P1-06a",
+  "note": "The in-memory store refuses today; durability against a database is the owed half."
+}

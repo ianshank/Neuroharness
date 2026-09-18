@@ -140,3 +140,143 @@ jobs:
           python -m pytest
           tests/unit/test_no_magic_values.py
           tests/unit/test_constitutional_constants.py
+
+  hard-rules-have-fixtures:
+    # The display name says "register" and not the property, for the reason the
+    # comment below gives: a green check reading "hard rules have fixtures" is
+    # the false claim itself.
+    name: Hard-rule fixture register (known gaps counted)
+    runs-on: ubuntu-latest
+    # Governance section 3, stage 4, second half: "a check that every hard
+    # registry rule has an active fixture". The `mutation-fixtures` job above is
+    # the first half; this is the one that was specified and never written.
+    #
+    # The job is named for what it checks and not for Article IV on purpose. The
+    # property Article IV states -- every hard gate ships with a killing fixture
+    # -- is false for every rule the register lists, so a green check called
+    # "Article IV" would be a tick beside a false sentence, and a tick is what
+    # stops the gate being built. Instead the
+    # shortfall lives in a checked-in, shrink-only register and this job prints
+    # the count it holds, so green reads as "the register is consistent" and
+    # never as "the constitution is satisfied".
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Known gaps in hard-rule fixture coverage
+        # Printed before the check runs, and into the run summary, so the number
+        # is visible to somebody reading the checks list rather than only to
+        # somebody who opens the register. A stage that reports "pass" while
+        # hard gates have no killing fixture has to say so out loud.
+        run: |
+          python - <<'PY' | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          import json
+          import pathlib
+
+          register = json.loads(
+              pathlib.Path("tests/fixtures/hard_rule_gaps.json").read_text(encoding="utf-8")
+          )
+          count = register["gap_count"]
+          print(f"hard-rules-have-fixtures: {count} known gaps")
+          for entry in register["gaps"]:
+              print(
+                  f"  {entry['critic_id']} ({entry['action_class']})"
+                  f" -> {entry['source_requirement']}, owed by {entry['owed_by']}"
+              )
+          PY
+
+      - name: Every hard enforcing rule is covered or on the register
+        run: python -m pytest tests/unit/test_hard_rule_fixtures.py
+
+  docs:
+    name: "Docs: spec IDs, ADR index and scenario register"
+    runs-on: ubuntu-latest
+    # Governance section 3, stage 11. All three checks answer the same question
+    # from different directions: does an identifier written down somewhere still
+    # name the thing it claims to name? A test citing a renamed requirement, an
+    # index row for a decision record nobody wrote, and a scenario the
+    # specification accepts nothing against are the same defect -- a citation
+    # that outlived its referent -- and each of them fails silently, because the
+    # document and the test both still read correctly on their own.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Every identifier the code cites exists in the SDD package
+        run: python -m pytest tests/unit/test_spec_id_consistency.py
+
+      - name: The ADR index and the ADR files agree
+        run: python -m pytest tests/unit/test_adr_index.py
+
+      - name: Every acceptance scenario is declared and its claims hold
+        # Article VII asks which scenario accepts a change. Forty-five are
+        # specified and three are executed; the register makes that a number
+        # instead of an impression, and fails if a declaration names a test that
+        # does not name the scenario back.
+        run: python -m pytest tests/unit/test_scenario_coverage.py
+
+  security:
+    name: Security (secrets and dependencies)
+    runs-on: ubuntu-latest
+    # Governance section 3, stage 9, and only the part that needs no
+    # repository-admin settings: CodeQL default setup and Trivy on images are
+    # deferred with their reason in `docs/sdd/08-increment-2-plan.md` section
+    # 4.3, so the deferral is a decision rather than an omission.
+    #
+    # Both checks are cheapest now and get harder every week. The repository
+    # guards a signer abstraction and key-id handling by constitution
+    # (`NFR-17`), so a committed secret is a constitutional failure and not only
+    # an incident; and a trusted computing base with one runtime dependency is
+    # the easiest dependency surface this project will ever audit.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks reads history, not the working tree. A secret that was
+          # committed and then removed is still a secret that was published,
+          # and a shallow clone would report the repository clean.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install gitleaks
+        # The released binary rather than the marketplace action: the action
+        # requires an organization licence key, and a scan that cannot run
+        # without a secret is a scan that will eventually be quietly disabled.
+        env:
+          GITLEAKS_VERSION: "8.18.4"
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: No secrets in the tree or its history
+        # `--redact` so a finding does not republish the secret in a public log,
+        # which is the classic way a leak detector becomes a leak.
+        run: gitleaks detect --source . --redact --no-banner --verbose
+
+      - name: Install pip-audit
+        run: python -m pip install --upgrade pip && python -m pip install pip-audit
+
+      - name: No known vulnerabilities in the dependency set
+        # Audits the project's declared dependencies rather than whatever the
+        # runner happens to have installed, so the result describes the trusted
+        # computing base and not the CI image. `--strict` fails on a dependency
+        # pip-audit cannot resolve: an unaudited dependency reported as a pass
+        # is the failure mode this stage exists to prevent.
+        run: pip-audit --strict --progress-spinner=off .
