@@ -29,3 +29,4 @@ Format: [MADR](https://adr.github.io/madr/) (Context → Decision → Alternativ
 | [ADR-0023](ADR-0023-one-resource-key-grammar.md) | One resource-key grammar, owned by the registry and rendered into everything else | Proposed | Increment-2 `D-1` |
 | [ADR-0024](ADR-0024-bounded-argument-schema-evaluation.md) | A bounded, closed-vocabulary evaluator for `argument_schema`, not a JSON Schema dependency | Proposed | Increment-2 `D-3` |
 | [ADR-0025](ADR-0025-reason-subject-grammar-at-construction.md) | One per-name reason-subject grammar, checked at construction | Proposed | Increment-2 `F-06` |
+| [ADR-0026](ADR-0026-issuance-claim-is-the-record.md) | The issuance claim is the record, and every absent token names its reason | Proposed | Increment-2 `D-4`, `D-5` |

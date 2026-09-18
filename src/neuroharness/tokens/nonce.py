@@ -325,13 +325,11 @@ class DuplicateIssuanceError(FailClosedError):
     different ``token_id`` values, both of which verify and both of which
     consume as a first use against the same envelope digest.
 
-    The refusal is reported as ``HARNESS_UNHEALTHY`` rather than
-    ``TOKEN_INVALID``: nothing is wrong with any token, and the closed
-    ``TokenInvalidReason`` catalogue in the decision-record schema describes the
-    broker's refusals, not the mint's. ``HARNESS_UNHEALTHY`` is also an
-    infrastructure reason, so it can never escalate to a human approval -
-    correctly, because no human can vouch for a harness that just tried to
-    authorise one decision twice.
+    The refusal is **not** ``TOKEN_INVALID``: nothing is wrong with any token,
+    and that closed catalogue describes the broker's refusals, not the mint's.
+    It is ``DUPLICATE_ISSUANCE:<decision_id>``, subjected with the decision the
+    chain already authorises, which is the first thing an operator wants when
+    one is refused.
 
     **What it means now, and the one thing it no longer means.** On the recorded
     path (:meth:`InMemoryIssuanceLedger.claim_recorded`) this error is raised
@@ -343,16 +341,24 @@ class DuplicateIssuanceError(FailClosedError):
     reports ``EVIDENCE_UNAVAILABLE``, which is what actually happened and what a
     retry can clear.
 
-    Whether a *correct control working* should keep declaring
-    ``HARNESS_UNHEALTHY`` is a live question and the honest answer is probably
-    no: it is an infrastructure reason, so an operator dashboard and the
-    ``NFR-21`` correlated-failure alert read every duplicate refusal as harness
-    ill-health. The fix is one catalogue member, and it is deliberately not made
-    here: the reason catalogue is outside this change's scope, and swapping the
-    name is a one-line edit once that member exists.
+    **Why it is no longer ``HARNESS_UNHEALTHY``.** That is an infrastructure
+    reason, so an operator dashboard and the ``NFR-21`` correlated-failure alert
+    read every duplicate refusal as the harness being ill - when a duplicate
+    refusal is a control working exactly as designed. Filing a working control
+    as an outage is the ``T-06`` confusion the round-two review already fixed
+    once at the class level, and it costs twice: the real outages are diluted,
+    and the control looks like a defect.
+
+    ``ADR-0026`` records the change. ``DUPLICATE_ISSUANCE`` keeps the property
+    that actually mattered.
+    Non-escalation does not come from being an infrastructure reason; it comes
+    from not being in ``ESCALATABLE_REASONS``, which is the allowlist for a
+    class's ``escalate_on``. So no human can wave a second mint through, which
+    is right - nobody can vouch for authorising one decision twice - while the
+    refusal now says what happened rather than that something broke.
     """
 
-    reason_name = ReasonName.HARNESS_UNHEALTHY
+    reason_name = ReasonName.DUPLICATE_ISSUANCE
 
 
 @dataclass(frozen=True, slots=True)

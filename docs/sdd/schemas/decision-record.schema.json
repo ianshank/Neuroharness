@@ -361,7 +361,7 @@
           "pattern": "^BATCH_DEPENDENCY_DENIED:(?:[0-9]{1,2})$"
         },
         {
-          "pattern": "^(APPROVAL_VOID|RETRY_UNRESOLVED):(?:[0-9a-f-]{36})$"
+          "pattern": "^(APPROVAL_VOID|DUPLICATE_ISSUANCE|RETRY_UNRESOLVED):(?:[0-9a-f-]{36})$"
         },
         {
           "pattern": "^(APPROVAL_NOT_PERMITTED|APPROVAL_REQUIRED):(?:[A-Z]{2,6}-[0-9]{2,4}[a-z]?)$"

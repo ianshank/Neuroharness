@@ -47,7 +47,12 @@ from neuroharness.models.record import (
     ExpectedRelation,
 )
 from neuroharness.observability.logging import configure_logging
-from neuroharness.pipeline import DecisionContext, DecisionPipeline, EvaluationOutcome
+from neuroharness.pipeline import (
+    DecisionContext,
+    DecisionPipeline,
+    EvaluationOutcome,
+    TokenWithheld,
+)
 from neuroharness.reason import ReasonCode, ReasonName
 from neuroharness.resolve.inputs import (
     CriticOutcome,
@@ -165,6 +170,10 @@ def outcome(
         resolution=Resolution(verdict=verdict, reason_codes=reason_codes, explain=explain),
         record=None,
         token=None,
+        # An outcome with no token must say why (``D-4``). ``VERDICT`` is the
+        # honest reason here: these fixtures describe decisions the verdict
+        # itself refused, which is the ordinary case the projection handles.
+        withheld=TokenWithheld.VERDICT,
     )
 
 

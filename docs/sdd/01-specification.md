@@ -186,7 +186,7 @@ Default 3 iterations per `action_id`; configurable per action class, maximum 10.
 ### 5.6 Reason-code catalogue (closed)
 Every non-`ALLOW` verdict carries at least one code; `ALLOW` MAY carry informational codes. Suffixes are validated by the gateway against registry rule, critic, fact and property IDs (`SEC-07`); payloads never contain model-generated free text.
 
-`RULE_FAILED:<rule_id>` · `FACT_MISSING:<fact>` · `FACT_STALE:<fact>` · `FACT_PROVIDER_ERROR:<fact>` · `SOLVER_UNKNOWN:<critic_id>` · `SOLVER_TIMEOUT:<critic_id>` · `CRITIC_ERROR:<critic_id>` · `POLICY_ENGINE_UNAVAILABLE` · `BUNDLE_INTEGRITY_FAILED` · `REGISTRY_INTEGRITY_FAILED` · `EVIDENCE_UNAVAILABLE` · `CLOCK_UNAVAILABLE` · `MONITOR_STATE_LOST` · `HARNESS_UNHEALTHY` · `SCHEMA_INVALID` · `ACTION_CLASS_UNREGISTERED` · `CLASS_HALTED` · `REPAIR_BUDGET_EXHAUSTED` · `REPAIR_RATE_LIMITED` · `APPROVAL_REQUIRED:<rule_id>` · `APPROVAL_NOT_PERMITTED:<rule_id>` · `APPROVAL_VOID:<approval_request_id>` · `APPROVER_NOT_ELIGIBLE` · `MONITOR_VIOLATION:<property_id>` · `RESOURCE_BUSY:<resource_key>` · `RETRY_UNRESOLVED:<decision_id>` · `TOKEN_INVALID:<reason>` (reasons: `expired`, `consumed`, `digest_mismatch`, `verdict_mismatch`, `mode_mismatch`, `bundle_stale`, `revoked`, `signature`) · `EFFECT_MISMATCH:<resource_key>` · `BATCH_DEPENDENCY_DENIED:<batch_index>`.
+`RULE_FAILED:<rule_id>` · `FACT_MISSING:<fact>` · `FACT_STALE:<fact>` · `FACT_PROVIDER_ERROR:<fact>` · `SOLVER_UNKNOWN:<critic_id>` · `SOLVER_TIMEOUT:<critic_id>` · `CRITIC_ERROR:<critic_id>` · `POLICY_ENGINE_UNAVAILABLE` · `BUNDLE_INTEGRITY_FAILED` · `REGISTRY_INTEGRITY_FAILED` · `EVIDENCE_UNAVAILABLE` · `CLOCK_UNAVAILABLE` · `MONITOR_STATE_LOST` · `HARNESS_UNHEALTHY` · `SCHEMA_INVALID` · `ACTION_CLASS_UNREGISTERED` · `CLASS_HALTED` · `REPAIR_BUDGET_EXHAUSTED` · `REPAIR_RATE_LIMITED` · `APPROVAL_REQUIRED:<rule_id>` · `APPROVAL_NOT_PERMITTED:<rule_id>` · `APPROVAL_VOID:<approval_request_id>` · `APPROVER_NOT_ELIGIBLE` · `MONITOR_VIOLATION:<property_id>` · `RESOURCE_BUSY:<resource_key>` · `RETRY_UNRESOLVED:<decision_id>` · `DUPLICATE_ISSUANCE:<decision_id>` · `TOKEN_INVALID:<reason>` (reasons: `expired`, `consumed`, `digest_mismatch`, `verdict_mismatch`, `mode_mismatch`, `bundle_stale`, `revoked`, `signature`) · `EFFECT_MISMATCH:<resource_key>` · `BATCH_DEPENDENCY_DENIED:<batch_index>`.
 
 ## 6. Requirements
 
@@ -354,6 +354,7 @@ Every non-`ALLOW` verdict carries at least one code; `ALLOW` MAY carry informati
 | Trusted clock unavailable | `ABSTAIN` for evaluations needing age, window or expiry; broker refuses tokens | `CLOCK_UNAVAILABLE` | `A-22` |
 | Monitor state lost or property-set version mismatch | `ABSTAIN` for monitored classes | `MONITOR_STATE_LOST` | `A-23` |
 | Health endpoint unhealthy | `ABSTAIN` | `HARNESS_UNHEALTHY` | `A-12b` |
+| A second token requested for a decision already authorised | Mint refuses; no second token; the first stands | `DUPLICATE_ISSUANCE:<decision_id>` | `MUT-20` |
 | Token expired / consumed / digest, verdict, mode or bundle mismatch / revoked | Broker refuses; recorded; alert on replay | `TOKEN_INVALID:<reason>` | `MUT-09`, `MUT-10`, `MUT-20`, `MUT-36` |
 | Approval expired, superseded or void | No token; new evaluation required | `APPROVAL_VOID` | `MUT-11`, `MUT-22` |
 | Approval required, class not approvable | `DENY` | `APPROVAL_NOT_PERMITTED` | `MUT-34` |

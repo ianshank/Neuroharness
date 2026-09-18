@@ -90,6 +90,16 @@ class ReasonName(str, Enum):
     # Execution
     RESOURCE_BUSY = "RESOURCE_BUSY"
     RETRY_UNRESOLVED = "RETRY_UNRESOLVED"
+
+    #: A second token was requested for a decision the chain already authorises.
+    #: Deliberately *not* an infrastructure reason. It used to report as
+    #: ``HARNESS_UNHEALTHY``, which is in ``INFRASTRUCTURE_REASONS``, so an
+    #: operator dashboard and the ``NFR-21`` correlated-failure alert read a
+    #: control working correctly as the harness being ill. It is also not in
+    #: ``ESCALATABLE_REASONS``, which is the allowlist for a class's
+    #: ``escalate_on``, so it still can never be waved through by a human -
+    #: nobody can vouch for authorising one decision twice.
+    DUPLICATE_ISSUANCE = "DUPLICATE_ISSUANCE"
     TOKEN_INVALID = "TOKEN_INVALID"
     BATCH_DEPENDENCY_DENIED = "BATCH_DEPENDENCY_DENIED"
 
@@ -143,6 +153,7 @@ SUBJECT_GRAMMAR: Final[Mapping[ReasonName, str]] = MappingProxyType(
         ReasonName.APPROVAL_VOID: UUID_SOURCE,
         ReasonName.RESOURCE_BUSY: RESOURCE_KEY_SOURCE,
         ReasonName.RETRY_UNRESOLVED: UUID_SOURCE,
+        ReasonName.DUPLICATE_ISSUANCE: UUID_SOURCE,
         ReasonName.BATCH_DEPENDENCY_DENIED: BATCH_POSITION_SOURCE,
         ReasonName.TOKEN_INVALID: "|".join(member.value for member in TokenInvalidReason),
     }
@@ -253,6 +264,7 @@ PARAMETERISED_REASONS: Final[frozenset[ReasonName]] = frozenset(
         ReasonName.APPROVAL_VOID,
         ReasonName.RESOURCE_BUSY,
         ReasonName.RETRY_UNRESOLVED,
+        ReasonName.DUPLICATE_ISSUANCE,
         ReasonName.TOKEN_INVALID,
         ReasonName.BATCH_DEPENDENCY_DENIED,
     }

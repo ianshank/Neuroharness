@@ -47,7 +47,7 @@ from neuroharness.models.record import (
     ExpectedRelation,
     Scalar,
 )
-from neuroharness.pipeline import EvaluationOutcome
+from neuroharness.pipeline import EvaluationOutcome, TokenWithheld
 from neuroharness.reason import (
     ESCALATABLE_REASONS,
     INFRASTRUCTURE_REASONS,
@@ -325,6 +325,15 @@ def outcome_of(request: ResolutionRequest) -> EvaluationOutcome:
         resolution=resolution,
         record=None,
         token=None,
+        # ``D-4``: an outcome with no token names why. Derived from the
+        # resolution rather than fixed, so a generated ``ALLOW`` is described
+        # as an issuance that did not land rather than as a verdict that
+        # refused - which would be a fiction the generator quietly produced.
+        withheld=(
+            TokenWithheld.VERDICT
+            if not resolution.permits_execution
+            else TokenWithheld.ISSUANCE_UNRECORDED
+        ),
     )
 
 

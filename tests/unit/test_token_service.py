@@ -36,7 +36,7 @@ from neuroharness.errors import (
     TokenVerdictMismatchError,
 )
 from neuroharness.models.common import Digest, Mode, Verdict
-from neuroharness.reason import ReasonName, TokenInvalidReason
+from neuroharness.reason import ESCALATABLE_REASONS, ReasonName, TokenInvalidReason
 from neuroharness.seams import FrozenClock, SequenceIdGenerator
 from neuroharness.tokens.model import DecisionToken, SignedToken
 from neuroharness.tokens.nonce import (
@@ -80,8 +80,17 @@ def digest(seed: str) -> Digest:
 #: The decision every helper mints for unless a test names another. At most one
 #: token exists per decision (``ADR-0008``), so a test that needs two tokens
 #: names two decisions.
-DECISION = "dec-0001"
-OTHER_DECISION = "dec-0002"
+#:
+#: UUIDs, not ``dec-0001``. ``DecisionToken.decision_id`` is typed as a bounded
+#: ``str`` while ``DecisionTokenRecord.decision_id`` is a ``UUID``, so the token
+#: layer accepts decision ids the record layer refuses - the same divergence
+#: ``ADR-0025`` found between the resolver and the record catalogue, one layer
+#: over. A decision minted under ``dec-0001`` could never have its issuance
+#: recorded, so these fixtures were describing a decision the harness cannot
+#: actually carry. Narrowing ``DecisionToken.decision_id`` itself is the real
+#: fix and is not made here; see the commit message.
+DECISION = "00000000-0000-0000-0000-000000000001"
+OTHER_DECISION = "00000000-0000-0000-0000-000000000002"
 
 ENVELOPE = digest("envelope")
 OTHER_ENVELOPE = digest("other-envelope")
@@ -319,7 +328,41 @@ class TestAtMostOneTokenPerDecision:
         harness.issue(decision_id=DECISION)
         with pytest.raises(DuplicateIssuanceError) as caught:
             harness.issue(decision_id=DECISION)
-        assert caught.value.reason_code.name is ReasonName.HARNESS_UNHEALTHY
+
+        code = caught.value.reason_code
+        assert code.name is ReasonName.DUPLICATE_ISSUANCE
+        # Subjected with the decision that already holds a token: the first
+        # thing an operator looks for when a duplicate is refused is the
+        # issuance that came first.
+        assert code.subject == DECISION
+
+    def test_the_refusal_is_not_filed_as_an_outage(self, harness: Harness) -> None:
+        """Why the reason name changed, asserted rather than left to the docstring.
+
+        It used to be ``HARNESS_UNHEALTHY``, which is in
+        ``INFRASTRUCTURE_REASONS`` - so an operator dashboard and the ``NFR-21``
+        correlated-failure alert read every duplicate refusal as the harness
+        being ill, when a duplicate refusal is a control working exactly as
+        designed. Filing a working control as an outage dilutes the real outages
+        and makes the control look like a defect; it is the ``T-06`` confusion
+        the round-two review already fixed once at the class level.
+
+        The property that actually mattered survives, and it survives for a
+        different reason than it used to. Non-escalation does not come from
+        being an infrastructure reason - it comes from not being in
+        ``ESCALATABLE_REASONS``, which is the allowlist for a class's
+        ``escalate_on``. So no human can wave a second mint through, which is
+        right: nobody can vouch for authorising one decision twice.
+        """
+        harness.issue(decision_id=DECISION)
+        with pytest.raises(DuplicateIssuanceError) as caught:
+            harness.issue(decision_id=DECISION)
+
+        code = caught.value.reason_code
+        assert not code.is_infrastructure, "a working control is not an outage"
+        assert ReasonName.DUPLICATE_ISSUANCE not in ESCALATABLE_REASONS, (
+            "a second mint must never be escalatable to a human approval"
+        )
 
     @pytest.mark.mutation
     def test_two_issues_for_one_decision_cannot_both_dispatch(
@@ -665,7 +708,7 @@ class TestVerify:
         # DENY - which issue() refuses to mint - is refused at the broker.
         token = DecisionToken(
             token_id="tok-forged",
-            decision_id="dec-0001",
+            decision_id=DECISION,
             envelope_digest=ENVELOPE,
             proposal_digest=PROPOSAL,
             policy_bundle_digest=BUNDLE,

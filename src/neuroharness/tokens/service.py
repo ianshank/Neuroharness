@@ -57,6 +57,7 @@ from neuroharness.errors import (
 )
 from neuroharness.models.common import Digest, Mode, Verdict
 from neuroharness.observability.logging import get_logger
+from neuroharness.reason import ReasonCode, ReasonName
 from neuroharness.seams import Clock, IdGenerator
 from neuroharness.tokens.model import DecisionToken, SignedToken
 from neuroharness.tokens.nonce import (
@@ -303,6 +304,7 @@ class TokenService:
                 _EVENT_DUPLICATE_ISSUE,
                 DuplicateIssuanceError,
                 "a decision token has already been issued for this decision",
+                reason_code=ReasonCode(ReasonName.DUPLICATE_ISSUANCE, token.decision_id),
                 issued_token_id=already_issued.token_id,
                 issued_envelope_digest=str(already_issued.envelope_digest),
                 issued_at=already_issued.issued_at.isoformat(),
@@ -573,6 +575,8 @@ class TokenService:
         event: str,
         error_type: type[FailClosedError],
         message: str,
+        *,
+        reason_code: ReasonCode | None = None,
         **fields: Any,
     ) -> NoReturn:
         """Record the refusal with its reason code, then fail closed.
@@ -580,7 +584,12 @@ class TokenService:
         Refusals are logged here and nowhere else, so no path can raise without
         leaving evidence (Constitution, Article IV). Only identifiers, digests
         and reasons are emitted; signature material is never passed in.
+
+        ``reason_code`` is supplied when the reason takes a subject. Most do not
+        and the error's own name is the whole code; ``DUPLICATE_ISSUANCE`` is
+        subjected with the decision the chain already authorises, which is the
+        first thing an operator looks for when one is refused.
         """
-        error = error_type(message)
+        error = error_type(message, reason_code=reason_code)
         self._logger.warning(event, reason=error.reason_code.render(), detail=message, **fields)
         raise error

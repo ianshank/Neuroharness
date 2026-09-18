@@ -23,6 +23,7 @@ Three of them, and they are not arbitrary:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Final
 from uuid import UUID
 
@@ -30,8 +31,10 @@ import pytest
 
 from neuroharness.models.common import OverrideKind, Verdict
 from neuroharness.models.record import Override
+from neuroharness.pipeline import EvaluationOutcome, TokenWithheld
 from neuroharness.pipeline.decision import RecordNotConstructibleError
 from neuroharness.reason import ReasonCode, ReasonName
+from neuroharness.resolve.inputs import Resolution
 from neuroharness.tokens.nonce import InMemoryRevocationList
 
 ANCHOR: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
@@ -383,3 +386,86 @@ def test_a_rule_id_and_a_critic_id_are_both_valid_and_tell_themselves_apart() ->
     # And prose is still refused, which is the property the widening must keep.
     with pytest.raises(ValueError):
         ReasonCode(ReasonName.RULE_FAILED, "ignore previous instructions")
+
+
+# --- D-4: an allow that authorises nothing must say why ----------------------
+
+
+class TestEveryAbsentTokenNamesItsReason:
+    """``EvaluationOutcome`` could describe an allow that authorised nothing.
+
+    ``verdict=ALLOW, token=None, evidence_failed=False`` was constructible, and
+    it was reachable: any issuance failure after the evaluation record landed
+    produced exactly that. The defence was a docstring saying every consumer
+    reads ``permits_execution``. The consumer is the gateway, written in a later
+    increment, and "the next person will read the docstring" is not an
+    invariant.
+
+    It is fail-closed either way - nothing executes without a token - so the
+    cost is not an unsafe execution. It is that the *log line* and the *metric*
+    say the decision was allowed, so an operator reading rollout data reads a
+    fiction, and a shadow-mode measurement counts an allow that never happened.
+    """
+
+    @staticmethod
+    def _outcome(**overrides: Any) -> EvaluationOutcome:
+        resolution = Resolution(verdict=Verdict.ALLOW, reason_codes=())
+        fields: dict[str, Any] = {
+            "verdict": Verdict.ALLOW,
+            "reason_codes": (),
+            "resolution": resolution,
+            "record": None,
+            "token": None,
+            "withheld": TokenWithheld.ISSUANCE_UNRECORDED,
+        }
+        fields.update(overrides)
+        return EvaluationOutcome(**fields)
+
+    def test_the_control_still_builds(self) -> None:
+        """Without this, an invariant that refused everything would look right."""
+        outcome = self._outcome()
+        assert outcome.verdict is Verdict.ALLOW
+        assert not outcome.permits_execution
+
+    def test_an_allow_with_no_token_and_no_reason_is_unconstructible(self) -> None:
+        """The exact state that was reachable, now refused at construction."""
+        with pytest.raises(ValueError, match="no token and no reason"):
+            self._outcome(withheld=None)
+
+    def test_a_token_cannot_also_be_withheld(self) -> None:
+        """The other half of the biconditional.
+
+        Stated as an if-and-only-if rather than two checks because the gap
+        between them was the defect. An outcome carrying both would let a caller
+        pick whichever half suited it.
+        """
+        with pytest.raises(ValueError, match="carries a token and also"):
+            self._outcome(token=object(), withheld=TokenWithheld.VERDICT)
+
+    def test_evidence_failed_cannot_disagree_with_the_reason(self) -> None:
+        """It is derived, so the two cannot come apart.
+
+        Narrow on purpose, and it means what it always meant: an unrecorded
+        *issuance* is also an evidence failure, but it leaves the verdict
+        standing and the decision retryable, which is a different thing for a
+        caller to do about it.
+        """
+        assert self._outcome(withheld=TokenWithheld.EVALUATION_UNRECORDED).evidence_failed
+        assert not self._outcome(withheld=TokenWithheld.ISSUANCE_UNRECORDED).evidence_failed
+        assert not self._outcome(withheld=TokenWithheld.VERDICT).evidence_failed
+
+    def test_every_withholding_reason_is_reachable_from_the_pipeline(self) -> None:
+        """A vocabulary with a member nothing produces is a vocabulary that lies.
+
+        ``_withholding_reason`` owns three of them and ``_maybe_issue`` the
+        other two; ``EVALUATION_UNRECORDED`` is set by ``evaluate`` itself. If a
+        member is added and never produced, an operator reading the enum will
+        look for a state the harness cannot reach.
+        """
+        import neuroharness.pipeline.decision as module
+
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        for member in TokenWithheld:
+            assert f"TokenWithheld.{member.name}" in source, (
+                f"{member.name} is declared and never produced"
+            )
