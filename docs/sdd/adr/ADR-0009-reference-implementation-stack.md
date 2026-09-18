@@ -1,6 +1,6 @@
 # ADR-0009: Reference implementation stack
 
-**Status:** Proposed · **Date:** 2026-09-18 · **Deciders:** Tech lead · **Origin:** technical plan §6
+**Status:** Superseded by [ADR-0019](ADR-0019-*.md) — key algorithm, deterministic solver bounding, Prolog deferral · **Date:** 2026-09-18 · **Deciders:** Tech lead · **Origin:** technical plan §6
 
 ## Context
 The design is language-agnostic (JSON Schemas, Rego, MCP), but a reference implementation must choose concrete components with mature bindings for SMT, MCP and evaluation tooling, and an operational story enterprises accept.

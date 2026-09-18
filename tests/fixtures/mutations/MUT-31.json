@@ -1,0 +1,8 @@
+{
+  "id": "MUT-31",
+  "state": "reserved",
+  "phase": 1,
+  "gate": "FR-25 lease",
+  "mutation": "Two concurrent consumptions for one resource key",
+  "expected": "Second refused RESOURCE_BUSY"
+}

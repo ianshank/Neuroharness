@@ -1,0 +1,8 @@
+{
+  "id": "MUT-05",
+  "state": "reserved",
+  "phase": 1,
+  "gate": "WF-04 precondition",
+  "mutation": "CI fact status failed",
+  "expected": "DENY RULE_FAILED:WF-04"
+}

@@ -1,0 +1,8 @@
+{
+  "id": "MUT-27",
+  "state": "reserved",
+  "phase": 2,
+  "gate": "FR-27 retry",
+  "mutation": "Retry while the prior receipt is timeout with no completion",
+  "expected": "ABSTAIN RETRY_UNRESOLVED"
+}

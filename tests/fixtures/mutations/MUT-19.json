@@ -1,0 +1,8 @@
+{
+  "id": "MUT-19",
+  "state": "active",
+  "phase": 1,
+  "gate": "FR-49 halt",
+  "mutation": "Proposal to a halted class",
+  "expected": "DENY CLASS_HALTED, no token"
+}

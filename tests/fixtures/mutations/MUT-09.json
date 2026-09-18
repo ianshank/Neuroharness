@@ -1,0 +1,10 @@
+{
+  "id": "MUT-09",
+  "state": "partial",
+  "phase": 1,
+  "gate": "Token single-use",
+  "mutation": "Replay consumed token",
+  "expected": "Broker refuses TOKEN_INVALID; alert",
+  "owned_here": "Nonce store rejects a second consumption of one token.",
+  "still_missing": "Broker-side refusal and the replay alert (P1-08)."
+}

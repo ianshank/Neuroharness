@@ -1,0 +1,8 @@
+{
+  "id": "MUT-06",
+  "state": "reserved",
+  "phase": 1,
+  "gate": "WF-06a temporal",
+  "mutation": "Approval piggybacking: approval for a different proposal digest",
+  "expected": "REQUIRES_APPROVAL APPROVAL_REQUIRED:WF-02, no token"
+}

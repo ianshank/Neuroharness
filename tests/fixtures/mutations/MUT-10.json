@@ -1,0 +1,10 @@
+{
+  "id": "MUT-10",
+  "state": "partial",
+  "phase": 1,
+  "gate": "Token digest binding",
+  "mutation": "Modify envelope after ALLOW",
+  "expected": "Broker refuses TOKEN_INVALID",
+  "owned_here": "Token verification recomputes the envelope binding and refuses a mismatch (FR-21).",
+  "still_missing": "The broker recomputing the digest over what it is about to execute (P1-08)."
+}

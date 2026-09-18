@@ -8,14 +8,19 @@ Neuroharness sits between an agent and the tools it wants to call. The agent pro
 
 ## Status
 
-**Phase: Specification (Spec-Driven Development).** No runtime code exists yet. This repository currently holds the research input, an independent peer review of that input, and the full SDD package (constitution, specification, technical plan, work breakdown, threat model, evaluation plan, delivery/governance model, ADRs, and JSON Schemas) that implementation will be driven from.
+**Phase: increment 1, the deterministic core.** The specification package is at revision 2, and the part of the harness that is pure computation now exists in `src/neuroharness/`: the closed reason-code catalogue, the typed fail-closed error hierarchy, the injection seams, RFC 8785 canonicalization and the proposal and envelope digests, the action-class and resource-key registries, the verdict resolver, the token service, the hash-chained evidence store with its write-ahead log, and the pipeline that sequences resolve -> record -> token. Unit, property-based and mutation suites run against it: `PYTHONPATH=src python3 -m pytest`.
+
+**Not built yet:** every component that talks to something outside the process. The MCP gateway, the policy decision point client, the critic bank and the broker are absent, and with them the `policy/` bundles and the `critics/` packs; they attach to the core through the protocol seams it already defines. `docs/sdd/07-increment-1-plan.md` scopes the increment, and its section 4a lists which of the twelve specified CI stages run today and which do not.
+
+This repository also holds the research input and two rounds of peer review. Round two put the specification through four adversarial reviews; the resulting v0.2 changed how approvals bind, how rollout modes interact with failure, how mutual exclusion is enforced, and what the project claims to verify.
 
 ## Document map
 
 | Path | What it is | Read it when |
 |---|---|---|
 | `docs/research/2026-09-18-neurosymbolic-wrapper-research-synthesis.md` | The research synthesis that motivated the project (kept verbatim for provenance). | You want the evidence base and the model-perspective analysis. |
-| `docs/review/2026-09-18-peer-review-research-synthesis.md` | Independent peer review of the synthesis: verdict, major/minor issues, citation audit, requested changes. | You want to know what the research got right, what it left out, and why the spec differs from it. |
+| `docs/review/2026-09-18-peer-review-research-synthesis.md` | Round-one peer review of the synthesis: verdict, major/minor issues, citation audit. | You want to know what the research got right and what it left out. |
+| `docs/review/2026-09-18-round-2-deep-dive-review.md` | Round-two review of the specification itself: 71 findings from four adversarial lenses, plus an audit that corrects round one. | You want to know how the design was attacked and what broke. |
 | `docs/sdd/README.md` | How Spec-Driven Development works in this repo and the status of each SDD document. | You are about to change anything under `docs/sdd/`. |
 | `docs/sdd/00-constitution.md` | Non-negotiable principles every design and code change must satisfy. | Always. Start here. |
 | `docs/sdd/01-specification.md` | Functional/non-functional requirements, invariant registry, verdict semantics, acceptance scenarios. | You are implementing or testing a requirement. |
@@ -24,12 +29,13 @@ Neuroharness sits between an agent and the tools it wants to call. The agent pro
 | `docs/sdd/04-threat-model.md` | Assets, adversaries, STRIDE analysis, controls and residual risk. | You are touching a trust boundary. |
 | `docs/sdd/05-evaluation-plan.md` | Metrics, quality gates, mutation matrix, benchmarks, replay protocol. | You are writing tests or reporting results. |
 | `docs/sdd/06-delivery-and-governance.md` | SDLC process: branching, CI gates, DoR/DoD, policy change management, progressive rollout, compliance mapping, RACI, risk register. | You are shipping or governing a change. |
+| `docs/sdd/07-increment-1-plan.md` | What increment 1 builds, what it deliberately excludes, and which CI stages that leaves running. | You want to know which parts of the harness exist. |
 | `docs/sdd/adr/` | Architecture Decision Records (MADR format). | You want to know *why* a decision was made, or you are proposing to change one. |
 | `docs/sdd/schemas/` | JSON Schema (2020-12) for the action envelope and decision record. | You are producing or consuming harness data. |
 
 ## The one-paragraph design
 
-An **action envelope** (agent-authored proposal + harness-authored context) is canonicalized and hashed. A **policy decision point** (OPA/Rego) evaluates allowlists, identity/delegation, environment, approval and evidence rules against **authoritative facts** the harness fetched itself. A **critic bank** of narrow, versioned verifiers (Z3/SMT contracts, a read-only Prolog rulebase, a finite-state trajectory monitor) checks only invariants that are formalizable for that action class. Verdicts compose by a fixed **resolution order** (`DENY` › `REPAIR` while budget remains › `ABSTAIN` › `REQUIRES_APPROVAL` › `ALLOW`). An `ALLOW` yields a **single-use decision token** bound to the envelope digest; the **tool broker** executes nothing without a valid token. Every step appends to a **hash-chained decision record**. Anything the harness cannot evaluate (solver `unknown`, timeout, stale fact, policy engine unavailable, audit write failure) is **fail-closed**: no token, no execution.
+An **action envelope** (agent-authored proposal + harness-authored context) is canonicalized and hashed twice: a **proposal digest** identifying what is asked and by whom, and an **envelope digest** identifying one evaluation. A **policy decision point** (OPA/Rego) evaluates allowlists, identity and delegation, environment, approval and evidence rules against **facts the harness fetched itself** from registered providers, never against agent claims and never against evidence the agent could have manufactured. A **critic bank** of narrow, versioned verifiers checks only invariants registered as formalizable for that action class. Verdicts resolve in a fixed order along the safety order `ALLOW < REQUIRES_APPROVAL < REPAIR < ABSTAIN < DENY`. Human approval binds to the **proposal** digest and triggers a **fresh evaluation** before anything executes, so oversight never underwrites stale evidence. An `ALLOW` yields a **single-use token** carrying the verdict and rollout mode; the **broker** holds the only credentials, refuses to execute without a matching token, and takes a **lease** on the resource so two sessions cannot act at once. After execution an **effect critic** checks that what happened is what was authorized. Every step appends to a **hash-chained record**. Anything the harness cannot evaluate is **fail-closed in every rollout mode**: no token, no execution.
 
 ## Contributing
 

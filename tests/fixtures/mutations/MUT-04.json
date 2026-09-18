@@ -1,0 +1,8 @@
+{
+  "id": "MUT-04",
+  "state": "reserved",
+  "phase": 1,
+  "gate": "WF-04 evidence",
+  "mutation": "Omit CI fact",
+  "expected": "ABSTAIN FACT_MISSING:ci_result"
+}

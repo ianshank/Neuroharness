@@ -1,0 +1,8 @@
+{
+  "id": "MUT-29",
+  "state": "reserved",
+  "phase": 2,
+  "gate": "FR-84 bundle transition",
+  "mutation": "Token presented after its bundle was superseded",
+  "expected": "TOKEN_INVALID:bundle_stale; pending approvals re-evaluated"
+}

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neuroharness.dev/schemas/mutation-fixture-declaration/v1",
+  "title": "Mutation fixture declaration",
+  "description": "One entry in the mutation catalogue of docs/sdd/05-evaluation-plan.md, with the lifecycle state defined in its section 1a. Constitution Article III says a gate without a killing fixture does not exist; this file is what makes that checkable, because a gate whose fixture was never written and a gate whose fixture was deleted are otherwise indistinguishable from an empty directory.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "state", "phase", "gate", "mutation", "expected"],
+  "properties": {
+    "id": {
+      "description": "The catalogue identifier. Must appear in the evaluation plan's table.",
+      "type": "string",
+      "pattern": "^MUT-[0-9]{2,3}[a-z]?$"
+    },
+    "state": {
+      "description": "Lifecycle state (evaluation plan section 1a). 'reserved': the identifier and intent exist, the gate does not. 'partial': one component owns part of the check and blocks at that layer, and the fixture is not counted toward hard-gate coverage. 'active': the gate exists and the fixture proves it blocks. 'retired': superseded, which needs an ADR.",
+      "enum": ["reserved", "partial", "active", "retired"]
+    },
+    "phase": {
+      "description": "Delivery phase that owns the gate.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4
+    },
+    "gate": {
+      "description": "The rule this fixture must find broken.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "mutation": {
+      "description": "What is changed to break it.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "expected": {
+      "description": "What the harness must do instead. A fixture whose expectation is 'something fails' kills nothing.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "owned_here": {
+      "description": "Required on 'partial': the clause this build does enforce.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "still_missing": {
+      "description": "Required on 'partial': the clause it does not, and who lands it. Named so that a partial fixture cannot quietly be read as full coverage.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "superseded_by": {
+      "description": "Required on 'retired': the ADR that withdrew this fixture. Retiring a killing fixture is a decision, not a cleanup.",
+      "type": "string",
+      "pattern": "^ADR-[0-9]{4}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "partial" } }, "required": ["state"] },
+      "then": { "required": ["owned_here", "still_missing"] }
+    },
+    {
+      "if": { "properties": { "state": { "const": "retired" } }, "required": ["state"] },
+      "then": { "required": ["superseded_by"] }
+    },
+    {
+      "if": { "properties": { "state": { "const": "reserved" } }, "required": ["state"] },
+      "then": { "not": { "anyOf": [{ "required": ["owned_here"] }, { "required": ["still_missing"] }] } }
+    }
+  ]
+}

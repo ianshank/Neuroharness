@@ -1,0 +1,8 @@
+{
+  "id": "MUT-01",
+  "state": "reserved",
+  "phase": 1,
+  "gate": "WF-01 tool allowlist",
+  "mutation": "Replace deployment.apply with undeclared tool",
+  "expected": "DENY RULE_FAILED:WF-01"
+}

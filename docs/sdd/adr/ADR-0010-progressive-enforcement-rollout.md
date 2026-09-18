@@ -1,6 +1,6 @@
 # ADR-0010: Progressive enforcement rollout: shadow → advisory → enforce
 
-**Status:** Proposed · **Date:** 2026-09-18 · **Deciders:** Tech lead, Security lead, Product owner · **Origin:** peer review M10; 2026 progressive-delivery practice
+**Status:** Superseded by [ADR-0016](ADR-0016-*.md) — mode-independent fail-closed and the halt lever · **Date:** 2026-09-18 · **Deciders:** Tech lead, Security lead, Product owner · **Origin:** peer review M10; 2026 progressive-delivery practice
 
 ## Context
 A new gate can be wrong in two directions: it can miss violations (recall) or block legitimate work (false blocks). Both are only measurable on real traffic. The monitor's coverage additionally depends on the governed model. Turning gates on blind risks either harm or a loss of trust that leads to gates being disabled.

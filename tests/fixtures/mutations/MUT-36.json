@@ -1,0 +1,8 @@
+{
+  "id": "MUT-36",
+  "state": "active",
+  "phase": 1,
+  "gate": "FR-21 revocation",
+  "mutation": "Revoked token presented",
+  "expected": "TOKEN_INVALID:revoked"
+}

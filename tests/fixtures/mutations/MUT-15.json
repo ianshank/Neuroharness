@@ -1,0 +1,8 @@
+{
+  "id": "MUT-15",
+  "state": "reserved",
+  "phase": 2,
+  "gate": "Repair budget",
+  "mutation": "Budget+1 failing envelopes",
+  "expected": "DENY REPAIR_BUDGET_EXHAUSTED"
+}

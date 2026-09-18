@@ -6,6 +6,7 @@
 | **Review type** | Design-basis review: *is this document fit to serve as the basis for an implementation specification?* |
 | **Reviewer** | AI reviewer (Claude), working in a sandboxed environment; see [Reviewer limitations](#reviewer-limitations) |
 | **Review date** | 2026-09-18 |
+| **Follow-up** | Round-two review of the resulting specification: `2026-09-18-round-2-deep-dive-review.md`, which also audits this document and corrects four of its findings (see §4 there). |
 | **Verdict** | **Accept with major revisions.** The thesis and the v1 scoping are sound and well supported. The document is not yet adequate as a design basis: verdict semantics, decision-to-execution binding, fact trust, fail-closed behaviour, the threat model, non-functional requirements and phase exit criteria are missing or inconsistent. Each gap is closed in the SDD package under `docs/sdd/`, and the traceability table at the end of this review says where. |
 
 ## 1. Summary of the artifact
@@ -169,9 +170,9 @@ Seven arXiv sources were retrieved through the alphaXiv service and checked agai
 
 | Review item | Resolved in |
 |---|---|
-| M1 | `01-specification.md` §5; ADR-0007 |
-| M2 | ADR-0008; `FR-20`–`FR-24`; `SEC-03`; `schemas/decision-record.schema.json` |
-| M3 | `schemas/action-envelope.schema.json`; `FR-10`–`FR-13`; `04-threat-model.md` §3 |
+| M1 | **Partially resolved in v0.1**, closed in v0.2: `01-specification.md` §5.3–5.6, ADR-0014 |
+| M2 | **Partially resolved in v0.1** (approval binding was unworkable), closed in v0.2: ADR-0015, `FR-20`–`FR-27`, `SEC-03` |
+| M3 | **Partially resolved in v0.1** (no provider registry, no evidence provenance), closed in v0.2: `FR-10`–`FR-14`, `SEC-11`, `T-21` |
 | M4 | `01-specification.md` §7; `NFR-10`–`NFR-14` |
 | M5 | `04-threat-model.md` |
 | M6 | `05-evaluation-plan.md` (targets marked as measured vs hypothesis); no news-derived figures in the spec |
@@ -186,4 +187,5 @@ Seven arXiv sources were retrieved through the alphaXiv service and checked agai
 - The review was performed in a sandbox with restricted network egress. Seven arXiv papers were retrieved through the alphaXiv service and read in summary or full-text form; news, vendor, market-research and W3C pages were not reachable and are marked unverifiable rather than wrong.
 - No code from any cited repository was executed.
 - The upstream registry that defines `INV-16` and `DEC-008` was not available; their content was inferred from the synthesis.
+- A second review round found 71 further issues, including one critical defect introduced by this review's own recommendation on progressive rollout. Treat this document as a first pass, not a clearance.
 - The reviewer is an AI system. Findings about evidence quality were checked against retrieved sources; findings about design gaps are engineering judgement and should be challenged by the human architecture reviewers named in `06-delivery-and-governance.md`.

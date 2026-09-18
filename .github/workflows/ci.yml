@@ -1,0 +1,142 @@
+# Quality gates for every pull request (`P0-10`; gate list in
+# `docs/sdd/06-delivery-and-governance.md` section 3).
+#
+# That document specifies twelve blocking stages. This workflow runs the ones
+# that have something real to run against the code that exists, and no others.
+# A stage added before the thing it checks exists would be a green check
+# proving nothing, which is the inversion the evaluation plan's fixture
+# lifecycle (section 1a) was written to prevent: it retires the pressure to
+# build the real gate. The stages still to come are listed in
+# `docs/sdd/07-increment-1-plan.md` with the tasks that own them.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Governance section 3, stage 2. The trusted computing base must stay at or
+  # above this; the suite currently sits near 99%, so a drop of this size is a
+  # deliberate act rather than drift.
+  MIN_COVERAGE: "90"
+
+jobs:
+  tests:
+    name: Unit tests and coverage (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor the package declares, and the next release. A harness whose
+        # digests or canonical form differed between interpreters would be a
+        # harness whose evidence could not be replayed on another machine.
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Unit tests with coverage
+        run: >-
+          python -m pytest
+          --cov=neuroharness
+          --cov-branch
+          --cov-fail-under=${{ env.MIN_COVERAGE }}
+          --cov-report=term-missing
+
+  mutation-fixtures:
+    name: Negative mutation fixtures
+    runs-on: ubuntu-latest
+    # Governance section 3, stage 4: "No manual override exists for this
+    # stage." It is a separate job so that a red mutation stage cannot be read
+    # as an incidental failure of the unit-test job, and so the constitutional
+    # claim it enforces -- Article III, a gate without a killing fixture does
+    # not exist -- is visible by name in the checks list.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Every active fixture kills its gate
+        run: python -m pytest -m mutation
+
+      - name: The fixture catalogue, declarations and plan agree
+        # The other half of stage 4: not only that the fixtures pass, but that
+        # every catalogued identifier is declared, every `active` or `partial`
+        # declaration is exercised by a marked test, and no test claims to kill
+        # a fixture whose gate nobody has built.
+        run: python -m pytest tests/unit/test_mutation_fixtures.py
+
+  schema-conformance:
+    name: Schema conformance
+    runs-on: ubuntu-latest
+    # Governance section 3, stage 10. The JSON Schemas in `docs/sdd/schemas/`
+    # are the authoritative wire contract and the models are one implementation
+    # of it; two implementations of one contract drift silently unless
+    # something checks them against each other in both directions.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Models and schemas agree in both directions
+        run: python -m pytest tests/unit/test_schema_conformance.py tests/unit/test_schema_versions.py
+
+      - name: Published schemas are valid JSON Schema
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          from jsonschema import Draft202012Validator
+
+          for path in sorted(pathlib.Path("docs/sdd/schemas").glob("*.json")):
+              schema = json.loads(path.read_text(encoding="utf-8"))
+              Draft202012Validator.check_schema(schema)
+              print(f"ok  {path}")
+          PY
+
+  no-magic-values:
+    name: No unnamed governing values
+    runs-on: ubuntu-latest
+    # Not one of the twelve, and deliberately its own check. A threshold or a
+    # domain string written as a literal in a code path is a policy decision
+    # nobody reviewed, which is the defect `T-17` describes; the scanner that
+    # prevents it is worth failing by name rather than inside a test run.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Governing values are named constants
+        run: >-
+          python -m pytest
+          tests/unit/test_no_magic_values.py
+          tests/unit/test_constitutional_constants.py
