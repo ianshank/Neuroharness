@@ -29,6 +29,7 @@ from uuid import UUID
 import pytest
 from pydantic import ValidationError
 
+from neuroharness.envelope.arguments import BoundedSchemaValidator, ViolationKind
 from neuroharness.errors import (
     RegistryValidationError,
     TokenModeMismatchError,
@@ -140,22 +141,18 @@ def issue(
     )
 
 
-# --- MUT-07 (partial): an open argument schema has nowhere to hide -----------
+# --- MUT-07 (partial): two layers of three ----------------------------------
 
 
 def test_mut_07_an_open_argument_schema_is_refused_at_load() -> None:
-    """``FR-02``. Owned here: the registry. Still missing: the envelope builder.
+    """``FR-02``, layer one. Owned here: the registry.
 
-    The catalogue's mutation is an extra argument on a call. This increment has
-    no component that validates a call's arguments, so what it can kill is the
-    precondition that makes that validation meaningful: an action class whose
+    The catalogue's mutation is an extra argument on a call. This kills the
+    precondition that makes validating one meaningful: an action class whose
     ``argument_schema`` leaves ``additionalProperties`` open would accept an
     undeclared argument *by design*, and no later check could tell the
     difference between an argument the author meant to allow and one nobody
     thought about.
-
-    Killing this at load is why the runtime check, when ``P1-02`` lands, has
-    something to enforce.
     """
     assert declaration("MUT-07")["state"] == "partial"
 
@@ -573,3 +570,39 @@ def test_mut_26_a_tightening_override_needs_only_one_principal() -> None:
         effective_at=ANCHOR,
     )
     assert halt.is_tightening
+
+
+def test_mut_07_an_undeclared_argument_is_detected_at_evaluation() -> None:
+    """``FR-02``, layer two. Owned here: the argument evaluator.
+
+    The registry guarantees the *schema* is closed; this is the first thing that
+    applies that guarantee to an actual payload. Until ``P1-02``'s ``FR-02`` half
+    landed, an action class's ``argument_schema`` had never been evaluated by
+    anything - it was stored, defended and unread.
+
+    **Why this fixture is still ``partial`` and not ``active``.** Its expected
+    outcome is ``SCHEMA_INVALID, no evaluation``. Detection is built; the
+    *consequence* is not. Nothing yet turns a violation into that reason code,
+    and nothing declines to evaluate - that is the orchestrator (``P1-01a``),
+    which this increment excludes. Promoting the fixture on the strength of
+    detection alone would produce a green, override-free check for a gate whose
+    second half nobody has written, which is the inversion ``05-evaluation-plan``
+    section 1a invented ``partial`` to prevent.
+    """
+    assert declaration("MUT-07")["state"] == "partial"
+
+    schema = registry_document()["action_classes"][0]["argument_schema"]
+    arguments = {
+        "service": "checkout",
+        "version": "1.2.3",
+        "target": "production",
+        "replicas": 3,
+    }
+    assert BoundedSchemaValidator().validate(arguments, schema) == (), (
+        "the control: these arguments satisfy the class, so a validator that "
+        "refused everything would pass the mutation below for the wrong reason"
+    )
+
+    violations = BoundedSchemaValidator().validate(arguments | {"dry_run": True}, schema)
+    assert [v.kind for v in violations] == [ViolationKind.UNDECLARED_ARGUMENT]
+    assert violations[0].pointer == "/dry_run"

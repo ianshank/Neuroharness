@@ -14,8 +14,8 @@ Format: [MADR](https://adr.github.io/madr/) (Context → Decision → Alternativ
 | [ADR-0008](ADR-0008-digest-bound-decision-tokens.md) | Digest-bound single-use decision tokens and approval binding | **Superseded by ADR-0015** | Peer review M2, M9 |
 | [ADR-0009](ADR-0009-reference-implementation-stack.md) | Reference implementation stack | **Superseded by ADR-0019** | Technical plan |
 | [ADR-0010](ADR-0010-progressive-enforcement-rollout.md) | Progressive enforcement rollout: shadow → advisory → enforce | **Superseded by ADR-0016** | Peer review M10 |
-| ADR-0011 | Reference workflow selection | Planned (`P0-02`) | — |
-| ADR-0012 | Licence and contribution model | Planned (`P0-11`) | — |
+| [ADR-0011](ADR-0011-reference-workflow-deployment.md) | Service deployment is the reference workflow | Proposed | `P0-02`, `OQ-02` |
+| [ADR-0012](ADR-0012-licence-and-contribution-model.md) | Licence and contribution model (contribution decided; licence escalated) | Proposed | `P0-11`, `OQ-09` |
 | [ADR-0013](ADR-0013-temporal-property-compiler.md) | Temporal property compiler: bounded LTLf subset, built in-house | Proposed | Round 2 `R2-D17`, `R2-B8` |
 | [ADR-0014](ADR-0014-verdict-resolution-order.md) | Verdict resolution order, safety order and escalation limits | Proposed (supersedes 0007; **amended** after a property test disproved its monotonicity claim) | Round 2 `R2-S3`, `R2-C1`, `R2-C7`, `R2-C8` |
 | [ADR-0015](ADR-0015-proposal-digest-and-approval-reevaluation.md) | Two digests, and approval as a fact that triggers re-evaluation | Proposed (supersedes 0008) | Round 2 `R2-S2`, `R2-C2`, `R2-B1` |

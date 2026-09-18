@@ -5,6 +5,6 @@
   "gate": "Schema",
   "mutation": "Extra/malformed argument",
   "expected": "SCHEMA_INVALID, no evaluation",
-  "owned_here": "The registry refuses an action class whose argument_schema is open, so an undeclared argument has nowhere to hide.",
-  "still_missing": "The envelope builder validating an envelope's arguments against that schema (P1-02)."
+  "owned_here": "Two of the three layers. The registry refuses an action class whose argument_schema is open, so an undeclared argument has nowhere to hide; and BoundedSchemaValidator now evaluates a call's arguments against that schema and reports an undeclared one (P1-02's FR-02 half).",
+  "still_missing": "The consequence. This fixture expects SCHEMA_INVALID and no evaluation; detection is built and nothing yet turns a violation into that reason code or declines to evaluate. That is the orchestrator (P1-01a)."
 }

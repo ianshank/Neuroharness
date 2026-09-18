@@ -403,7 +403,9 @@ Beyond the standing Definition of Done in `06-delivery-and-governance.md` §6:
 5. Reason-code subject shapes have one source of truth, and `TokenInvalidReason` can gain a member in one edit.
 6. The two resolver narrowings are replaced by an import-time totality assertion; the accessor on the blocking path is non-`Optional` so `mypy --strict` passes without an `assert`; the four named untested paths have tests.
 7. `docs/sdd/09-fact-provider-specification.md` exists, decides `D-2`, and is reviewed.
-8. `LICENSE` and `CONTRIBUTING.md` exist; `pyproject.toml` no longer says `UNLICENSED`; `ADR-0012` exists.
+8. `CONTRIBUTING.md` and `ADR-0012` exist; `ADR-0011`'s dangling index row is closed.
+
+    > **Half open at close, deliberately.** `LICENSE` is not written and `pyproject.toml` still says `UNLICENSED`. Choosing a licence is a legally consequential and effectively irreversible act of the repository owner — a grant cannot be withdrawn from anyone who already received it — and `R-B` records that none of these ADRs has an approver. `ADR-0012` sets out the options and recommends Apache-2.0; `ADR-0013` already removed the GPL constraint that made `OQ-09` hard. The Phase 0 gate does not move on `P0-11`.
 9. `uv.lock` is checked in; `[tool.ruff]` and `[tool.mypy]` are declared; `mypy` is in `[dev]`; `.pre-commit-config.yaml` exists.
 10. CI stage 1 blocks on ruff defaults **and on `mypy --strict` at zero errors**, with the broad rule set on a declared, shrinking per-rule ratchet.
 11. CI stage 11 blocks on spec-ID consistency and ADR-index consistency; CI stage 9 runs gitleaks and pip-audit.
@@ -411,7 +413,9 @@ Beyond the standing Definition of Done in `06-delivery-and-governance.md` §6:
 13. Every acceptance scenario has a declaration; the checker blocks and matches on a word boundary; `07-increment-1-plan.md:120`'s claims for `A-20`, **`A-21`** and `A-22` are corrected.
 14. An `ActionEnvelope` is built from a tool call, with `stripped_proposal_keys` recording what was removed and arguments validated against the class's schema; both digests computed through **one** pinned serialization, asserted by a property test.
 15. A typed agent-facing response exists in which free text is unrepresentable and no token can leak.
-16. `MUT-07` is `active` and killed; `WF-05`, `WF-06b`, `WF-06c` and the SMT contract have declarations; the WBS amendment moving `MUT-17` to `P1-04` is written and submitted; every fixture that stays `partial` or `reserved` names the task that owes it.
+16. `WF-05`, `WF-06b`, `WF-06c` and the SMT contract have declarations; the WBS amendment moving `MUT-17` to `P1-04` is written and submitted; every fixture that stays `partial` or `reserved` names the task that owes it.
+
+    > **Corrected at close.** This item originally read "`MUT-07` is `active` and killed". It is not, and should not be. Its expected outcome is `SCHEMA_INVALID, no evaluation`; §5.1 built the *detection* and nothing yet turns a violation into that reason code or declines to evaluate, which is the orchestrator (`P1-01a`, excluded by §7). Promoting it would have produced a green, override-free check for a gate whose second half nobody wrote — the inversion `05-evaluation-plan.md` §1a invented `partial` to prevent, committed by the plan that prosecutes it in §6. The declaration now records two layers owned and one owed, and a second killing test covers the layer that landed.
 17. The full suite passes, coverage stays at or above the 90% floor, and **no test is skipped, weakened or quarantined.**
 18. The three sponsor escalations in §4.4 each have a decision or an explicitly recorded deferral **with a date**. An escalation still simply open at the end of the increment was not escalated.
 19. `ADR-0011` and `ADR-0012` exist as files; the **15** `Proposed` ADRs are resolved per `D-6`; the 100%-resolver-branch gate says the same thing in `06-delivery-and-governance.md:27` and `02-technical-plan.md:399`.
@@ -425,32 +429,83 @@ Beyond the standing Definition of Done in `06-delivery-and-governance.md` §6:
 
 **Increment 3, in this order:** `P1-06a`'s durable half first — eight dependents, no sponsor decision needed, `D-5` already settled, and it moves `MUT-13` — then `P1-27` and `P1-09`'s hot reload, cut from here on capacity. Then, whichever the sponsor unblocks: `P1-18` and `P1-04` if `P0-06` and `D-7` closed, or `P1-08` if `P0-13` landed. The §5.5 register is increment 3's backlog in priority order, with **17** entries.
 
-**The re-baseline this plan owes.** `03-work-breakdown.md:18` puts Phase 1a at weeks 4–9. Increment 2 spends four weeks on Phase 0 closure and repairs and completes **no** Phase 1a task outright. Phase 1a's exit gate needs 21 active fixtures and will have 6 or 7. On the WBS's own sizing the remaining Phase 1a work is unchanged, so the 24-week schedule moves out by at least this increment — and further by however long `P0-12` and `P0-13` take, since `P1-08` and everything behind it cannot start without them. **A dated re-baseline is a deliverable of this increment (§12.21), not a footnote**, and it cannot be produced until the sponsor answers, which is itself the argument for escalating in week 1 rather than week 4.
+**The re-baseline, delivered (§12.21).** Dated 2026-09-18, at the increment's
+closing commit.
+
+**What increment 2 actually closed.** No Phase 1a task outright. `P1-02` moved
+from ~25% to its `FR-02`/`FR-03` half and cannot close, because its WBS
+acceptance criterion names `MUT-17`, whose gate is the PDP input builder (§5.1
+proposes the amendment). `P0-06` is written. `P0-11` is half written — the
+contribution model is decided, the licence is escalated. `P0-10` gained stages 1,
+9 and 11. Six defects in merged code were repaired, three of which were live
+rather than latent.
+
+**What it did not move: the number Phase 1a is counted by.** The exit gate names
+21 fixtures that must be `active`. There were 4 of those 21 active before this
+increment and there are 4 now. The one fixture this increment was expected to
+promote, `MUT-07`, stays `partial`: the work built its second layer of three, and
+promoting on a half-built gate is the inversion `05-evaluation-plan.md` §1a
+exists to prevent. That is the honest headline and it should not be softened —
+four weeks of work, zero movement on the metric the phase is judged by.
+
+It is not zero *progress*: 17 hard enforcing rules are now counted rather than
+uncounted, 45 scenarios are declared rather than assumed, and the deterministic
+core no longer contains a path where a correct hard `DENY` cannot be recorded.
+But a gate count is the thing the plan committed to, and it did not move.
+
+**The schedule.** `03-work-breakdown.md:18` puts Phase 1a at weeks 4–9. On the
+WBS's own sizing the remaining Phase 1a work is unchanged, so **v1.0 moves out by
+at least this increment — four weeks — and that is the floor, not the estimate.**
+
+The estimate cannot be given, and the reason is the deliverable:
+
+| Blocker | What it gates | Who can clear it |
+|---|---|---|
+| `P0-12` | Nine `Proposed` ADRs with no one who can accept one; two-person review for `P1-15`; `OQ-05`; the `P0-01`/`P0-07` signatures; `D-7` | Sponsor |
+| `P0-13` | `P1-01a`, `P1-07`-for-real, therefore `P1-08`, therefore `P1-13`/`P1-25`/`P1-26`/`P1-28` and transitively `P1-14`/`P1-19`/`P1-23` | Sponsor, with procurement |
+| `D-7` | Fact providers, therefore `P1-18` → `P1-04` → `P1-11`/`P1-12`/`P1-15`/`P1-16` | Product and security |
+| Branching model | Every commit in this increment; no pull request can target anything | Repository owner |
+
+**So: 24 weeks becomes at least 28, and the span beyond that is a function of
+sponsor latency rather than of engineering.** Each of the four above has been
+open for the whole increment. If they close inside the next two weeks, increment
+3 starts on `P1-06a`'s durable half and the slip stays near the floor. If they do
+not, increment 3 has no code path that is both unblocked and worth taking, and
+the honest re-baseline at that point is a pause, not a longer plan.
+
+**The recommendation a re-baseline is for:** do not schedule increment 3 until
+`P0-12` closes. It is the cheapest of the four — it costs a meeting, not money or
+procurement — and it is the one that unblocks the other three, because `P0-13` is
+a budget decision someone has to be accountable for, `D-7` needs a named security
+owner, and the branching model needs someone with repository admin.
 
 ---
 
 ## Appendix A — verification log
 
-Measured on 2026-09-18 against the tree at the commit that introduced this revision. Re-run at the closing commit per §12.22.
+Re-measured at the increment's closing commit, per §12.22. Where a number moved
+because this increment moved it, both are shown: the point of re-running the log
+is to show what the work changed, not to quietly overwrite the evidence that
+motivated it.
 
 | Claim | Command | Result |
 |---|---|---|
-| Suite health | `PYTHONPATH=src pytest -q` | 1908 passed, ~12.7s |
-| ruff, defaults | `ruff check --target-version py311 --line-length 100 src tests` | 1 error (`F401`, `MappingProxyType`, `evidence/store.py:36`) |
-| ruff, broad | `ruff check --select E,F,W,I,B,UP,SIM,C4,RUF …` | 173 errors, 112 auto-fixable |
-| mypy | `mypy --strict --ignore-missing-imports src/neuroharness` | 48 errors in 9 files, 35 source files checked. Not previously run; `mypy` is absent from `pyproject.toml` and `ci.yml` |
-| Fixture census | all `tests/fixtures/mutations/MUT-*.json` | 5 active, 6 partial, 26 reserved |
-| Hard-rule gap | `reference_deploy_registry.json` hard critics × fixture states | 19 hard critics, **17 `mode: enforce`**, 0 with an active fixture; `WF-05`, `WF-06b`, `WF-06c` and the SMT typed contract have no catalogue entry; the two advisory ones are both `WF-06a`, which has `MUT-06` and `MUT-24` |
-| Scenario coverage | `grep -rohIE "\bA-[0-9]{2}\b" tests/` vs `01-specification.md` | 45 scenarios; **3** referenced (`A-16`, `A-19`, `A-35`). The unanchored form adds a false `A-25` from `SHA-256` |
-| CI stages | `ci.yml` jobs vs `06-delivery-and-governance.md` §3 | 3 of 12 (stages 2, 4, 10); `no-magic-values` is declared at `ci.yml:122` to be outside the twelve |
-| ADRs | `ls docs/sdd/adr/ADR-*.md`, status lines | 19 files (index lists 21); 15 `Proposed`, 4 `Superseded`, 0 `Accepted` |
+| Suite health | `PYTHONPATH=src pytest -q` | **2598 passed**, ~21s (was 1908) |
+| ruff, defaults | `ruff check --select E4,E7,E9,F src tests` | **0** (was 1) |
+| ruff, broad | `ruff check src tests` (config in `pyproject.toml`) | **0** (was 173). Three rules ignored with the reason at the ignore |
+| mypy | `python3 -m mypy` (strict, pydantic plugin) | **0** in 43 source files (was 48 in 9). 44 of the 48 were the missing plugin line |
+| Fixture census | all `tests/fixtures/mutations/MUT-*.json` | 5 active, 6 partial, 30 reserved (41; four declarations added for gates the catalogue never named). **Unchanged at 5 active** — see §6 |
+| Hard-rule gap | `tests/fixtures/hard_rule_gaps.json`, keyed on every registry the build loads | **17**, unchanged, and now counted by a blocking shrink-only check rather than by nobody. The four missing catalogue entries were added as `reserved` declarations |
+| Scenario coverage | `tests/fixtures/scenarios/` + `test_scenario_coverage.py` | 45 scenarios; **3** referenced (`A-16`, `A-19`, `A-35`), 42 declared not-executable with the task that owes them. Unchanged, and now enforced rather than asserted |
+| CI stages | `ci.yml` jobs vs `06-delivery-and-governance.md` §3 | **8 jobs** covering stages 1, 2, 4 (both halves), 9 (partial), 10 and 11, plus `no-magic-values`, which `ci.yml` declares outside the twelve (was 3) |
+| ADRs | `ls docs/sdd/adr/ADR-*.md`, status lines | **26 files**, no dangling index rows (was 19 files against an index of 21). 0 `Accepted`, because `P0-12` has named nobody who can accept one |
 | Resource-key drift | `is_resource_key` vs `models/record.py:132`, plus `reason.py:143` | Five diverging axes, four sources; `cluster-prod:svc-a` and `k8s-namespace:default` registry-valid and unrecordable; `s3:bucket_name` and `repo:-foo` recordable and unresolvable |
 | Fact escalation | `resolve()` over the three `FactState` shapes | `required=True, escalatable=True` → `REQUIRES_APPROVAL`; the loader refuses the shape; constructed in `test_resolver_truth_table.py` (4 rows) **and** `test_resolver_properties.py:99-112` (2 strategies) |
 | `jsonschema` in TCB | `grep -rn jsonschema src/ pyproject.toml` | dev-only extra, zero imports in `src/` |
 | Strip function | `grep -rn "stripped_proposal_keys\|def strip" src/` | a model field and its docstring; no implementation |
 | Hot reload | `grep -rni reload src/ --include=*.py` | **one** docstring mention, `registry/models.py:562` |
 | Redaction | `_SAFE_KEYS & _SENSITIVE_KEYS` | empty; `provider_api_key` and `bundle_signature_blob` are unredacted |
-| Branch topology | `git fetch --prune && git remote show origin` | one branch, `claude/sdd-plan-peer-review-i2v012`, which is also the default. A stale local `origin/main` ref survived the deletion until pruned |
+| Branch topology | `git fetch --prune && git remote show origin` | Unchanged: one branch, which is also the default. No pull request can target anything |
 
 ## Appendix B — corrections to existing documents
 
