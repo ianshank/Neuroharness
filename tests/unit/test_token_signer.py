@@ -75,6 +75,22 @@ class TestHmacSigner:
         with pytest.raises(ConfigurationError):
             HmacSigner(key_id="key-a", secret=b"tooshort")
 
+    def test_the_secret_floor_is_exactly_where_adr_0019_puts_it(self) -> None:
+        """``ADR-0019``: the floor is the whole control, so it has to be exact.
+
+        The only secret tested above is far below the floor, which a check
+        drifted by a byte would still refuse. A floor that is quietly one byte
+        low admits a deployment secret with less entropy than the MAC output it
+        protects, and the deployment starts normally: nothing downstream can
+        tell a weak key from a strong one, and every token minted under it is
+        that much cheaper to forge.
+        """
+        with pytest.raises(ConfigurationError, match="shorter than"):
+            HmacSigner(key_id="key-a", secret=b"s" * (MIN_HMAC_SECRET_BYTES - 1))
+
+        exactly_at_the_floor = HmacSigner(key_id="key-a", secret=b"s" * MIN_HMAC_SECRET_BYTES)
+        assert exactly_at_the_floor.verify(PAYLOAD, exactly_at_the_floor.sign(PAYLOAD))
+
     def test_empty_key_id_is_a_startup_failure(self) -> None:
         with pytest.raises(ConfigurationError):
             HmacSigner(key_id="", secret=SECRET_A)
@@ -203,6 +219,18 @@ class TestMultiKeySigner:
         multi = MultiKeySigner(active=signer_b(), additional=[signer_a()])
         with pytest.raises(ConfigurationError):
             multi.retire("key-b")
+
+    def test_retiring_a_key_the_deployment_does_not_hold_refuses(self) -> None:
+        """Retiring a name nobody holds is an operator who is looking elsewhere.
+
+        A silent no-op would report success for a retirement that did not
+        happen, so a key believed withdrawn after a compromise would keep
+        verifying tokens until someone checked by hand (``NFR-17``).
+        """
+        multi = MultiKeySigner(active=signer_b(), additional=[signer_a()])
+        with pytest.raises(ConfigurationError, match="unknown key id"):
+            multi.retire("key-z")
+        assert multi.verifying_key_ids == {"key-a", "key-b"}
 
     def test_satisfies_the_keyed_verifier_protocol(self) -> None:
         assert isinstance(MultiKeySigner(active=signer_a()), KeyedVerifier)

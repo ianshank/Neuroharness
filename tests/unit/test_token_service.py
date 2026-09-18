@@ -47,7 +47,7 @@ from neuroharness.tokens.nonce import (
     InMemoryRevocationList,
     IssuanceLedger,
 )
-from neuroharness.tokens.service import ConsumeResult, TokenService
+from neuroharness.tokens.service import MIN_TOKEN_TTL_SECONDS, ConsumeResult, TokenService
 from neuroharness.tokens.signer import HmacSigner, MultiKeySigner
 
 START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
@@ -61,6 +61,14 @@ ISSUE_WORKERS = 32
 ISSUE_POOL_SIZE = 8
 SECRET_A = b"a" * 32
 SECRET_B = b"b" * 32
+
+#: A bundle-grace window (``FR-84``) long enough to step across one second at a
+#: time. Mirrors the value the neighbouring grace tests configure.
+GRACE_SECONDS = 30
+
+#: A token lifetime comfortably past that window, so a refusal at the grace
+#: boundary is about the superseded bundle and not about expiry.
+GRACE_TTL_SECONDS = 300
 
 
 def digest(seed: str) -> Digest:
@@ -205,6 +213,47 @@ class TestIssue:
                 clock=FrozenClock(START),
                 id_generator=SequenceIdGenerator(),
                 ttl_seconds=0,
+            )
+
+    @pytest.mark.parametrize(
+        "ttl_seconds",
+        [
+            pytest.param(MIN_TOKEN_TTL_SECONDS - 1, id="zero"),
+            pytest.param(-MIN_TOKEN_TTL_SECONDS, id="negative"),
+        ],
+    )
+    def test_a_non_positive_per_call_ttl_is_refused_with_a_typed_error(
+        self, harness: Harness, ttl_seconds: int
+    ) -> None:
+        """A per-class ttl arrives from the signed registry, so it is operator input.
+
+        The floor is checked at construction *and* here, because the per-call
+        value bypasses the constructor entirely. Without this check a zero ttl
+        would mint a token that is expired on arrival - an outage wearing a
+        security control - and the refusal would surface as a raw pydantic
+        ``ValueError`` from the model rather than as the typed
+        :class:`ConfigurationError` that says "refuse to start", which is an
+        untyped error on the decision path.
+        """
+        with pytest.raises(ConfigurationError, match="at least"):
+            harness.issue(ttl_seconds=ttl_seconds)
+
+    def test_a_negative_bundle_grace_refuses_to_start(self) -> None:
+        """A negative grace is a window that ends before it opens (``FR-84``).
+
+        Arithmetic on it does not fail: it silently makes every token carrying a
+        superseded bundle stale slightly *before* it was issued, which looks
+        exactly like a correctly enforced zero grace until the day someone widens
+        the window and nothing changes.
+        """
+        with pytest.raises(ConfigurationError, match="bundle_grace_seconds"):
+            TokenService(
+                signer=HmacSigner(key_id="key-a", secret=SECRET_A),
+                nonce_store=InMemoryNonceStore(),
+                revocation_list=InMemoryRevocationList(),
+                clock=FrozenClock(START),
+                id_generator=SequenceIdGenerator(),
+                bundle_grace_seconds=-MIN_TOKEN_TTL_SECONDS,
             )
 
     @pytest.mark.mutation
@@ -362,9 +411,19 @@ class TestVerify:
         assert harness.verify(signed) == signed.token
 
     def test_verification_is_pure_and_repeatable(self, harness: Harness) -> None:
+        """Verifying must never be the thing that spends the token.
+
+        The broker verifies before it consumes, and a mirrored or retried
+        request can verify several times before one consumption. A ``verify``
+        that recorded anything would burn the nonce without dispatching, so the
+        legitimate delivery that followed would be refused as a replay: a failed
+        request converted into a denial of the action it was authorising.
+        """
         signed = harness.issue()
-        harness.verify(signed)
-        harness.verify(signed)
+        first = harness.verify(signed)
+        second = harness.verify(signed)
+        assert first == second == signed.token
+        assert harness.nonce_store.entry_for(signed.token.token_id) is None
 
     def test_a_tampered_payload_fails_the_signature_check(self, harness: Harness) -> None:
         signed = harness.issue()
@@ -498,6 +557,25 @@ class TestVerify:
         harness.clock.advance(10)
         assert harness.verify(signed, current_bundle_digest=NEW_BUNDLE) == signed.token
 
+    def test_the_grace_window_is_inclusive_at_its_last_second(self) -> None:
+        """``FR-84`` fixes where the window ends, and both sides of it matter.
+
+        One second early and a deployment that set a grace to cover its bundle
+        rollout starts refusing in-flight tokens a second sooner than it
+        configured - a fail-closed outage during exactly the transition the
+        grace exists to smooth. One second late and a superseded bundle keeps
+        authorising executions after the window an operator was told to rely on.
+        """
+        harness = Harness(bundle_grace_seconds=GRACE_SECONDS, ttl_seconds=GRACE_TTL_SECONDS)
+        signed = harness.issue(policy_bundle_digest=BUNDLE)
+
+        harness.clock.advance(GRACE_SECONDS)
+        assert harness.verify(signed, current_bundle_digest=NEW_BUNDLE) == signed.token
+
+        harness.clock.advance(1)
+        with pytest.raises(TokenBundleStaleError):
+            harness.verify(signed, current_bundle_digest=NEW_BUNDLE)
+
     def test_a_superseded_bundle_is_refused_past_the_grace_window(self) -> None:
         harness = Harness(bundle_grace_seconds=30, ttl_seconds=300)
         signed = harness.issue(policy_bundle_digest=BUNDLE)
@@ -623,7 +701,13 @@ class TestKeyRotation:
         after.revocations.revoke_key("key-a", reason="rotation-compromise")
         with pytest.raises(TokenRevokedError):
             after.verify(old_token)
-        assert after.verify(after.issue()) is not None
+        # Revoking the compromised key must not take the deployment down: what
+        # is minted under the surviving key still verifies, and under that key.
+        # ``verify`` raises on refusal rather than returning ``None``, so an
+        # identity check here would hold however the token came back.
+        fresh = after.issue()
+        assert fresh.token.key_id == "key-b"
+        assert after.verify(fresh) == fresh.token
 
 
 class TestTokenPayload:

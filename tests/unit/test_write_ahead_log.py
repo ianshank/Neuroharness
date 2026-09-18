@@ -38,6 +38,10 @@ _TENANT_A = "tenant-a"
 _TENANT_B = "tenant-b"
 _OUTAGE_RECORDS = 3
 
+#: The documented capacity of the local write-ahead log, pinned here so that
+#: changing it is a reviewed act rather than a one-character edit.
+EXPECTED_MAX_PENDING_RECORDS = 10_000
+
 #: The version every well-formed fixture declares, taken from the one place that
 #: declares it rather than repeated here (``F4``).
 _RECORD_SCHEMA_VERSION = SchemaCompatibility.written_version(SchemaKind.RECORD)
@@ -182,8 +186,27 @@ def test_stage_refuses_more_than_the_configured_bound(clock: FrozenClock) -> Non
     assert len(small.pending()) == 2
 
 
-def test_the_default_bound_is_a_named_value() -> None:
-    assert DEFAULT_MAX_PENDING_RECORDS > 0
+def test_the_default_bound_is_the_documented_value() -> None:
+    """The bound is a capacity promise, so drifting it is an operational change.
+
+    It is sized for a long evidence outage at the throughput the performance
+    budget assumes. Quietly lowering it turns an evidence outage into a gateway
+    outage sooner than anyone was told to expect; quietly raising it lets the
+    gateway consume memory past the point the sizing covers. Either is a change
+    a reviewer should have to see, so the value is pinned rather than merely
+    asserted to be positive.
+    """
+    assert DEFAULT_MAX_PENDING_RECORDS == EXPECTED_MAX_PENDING_RECORDS
+
+
+def test_the_constructor_default_is_that_same_bound(clock: FrozenClock) -> None:
+    """A log whose default differs from the documented one is undocumented.
+
+    Read through the private attribute deliberately: the only public way to
+    observe the bound is to stage ten thousand records, and a test that slow is
+    a test that gets skipped.
+    """
+    assert InMemoryWriteAheadLog(clock=clock)._max_pending == DEFAULT_MAX_PENDING_RECORDS
 
 
 def test_a_zero_capacity_log_is_refused(clock: FrozenClock) -> None:

@@ -50,6 +50,10 @@ _KEY_ID = "evidence-checkpoint-2026-09"
 #: A record-schema version no build reads, used to exercise the refusal.
 _UNREADABLE_SCHEMA_VERSION = "0.9"
 
+#: Unreadable too, but sharing the MAJOR component of the version this build
+#: writes: the case a build that compared only the major would wave through.
+_UNREADABLE_MINOR_SCHEMA_VERSION = "1.99"
+
 #: A plausible *next* record-schema version, used to widen the readable set.
 _NEXT_SCHEMA_VERSION = "1.2"
 
@@ -195,9 +199,24 @@ def test_append_refuses_a_malformed_record(
     assert len(store) == 0
 
 
-def test_append_refuses_an_unreadable_schema_version(store: InMemoryEvidenceStore) -> None:
+@pytest.mark.parametrize(
+    "version",
+    [
+        pytest.param(_UNREADABLE_SCHEMA_VERSION, id="unknown-major"),
+        pytest.param(_UNREADABLE_MINOR_SCHEMA_VERSION, id="known-major-unknown-minor"),
+    ],
+)
+def test_append_refuses_an_unreadable_schema_version(
+    store: InMemoryEvidenceStore, version: str
+) -> None:
+    """Both components are the version: a record half-read is evidence half-kept.
+
+    The major-only case alone would be satisfied by a build that compared just
+    the major component, which would then append records written by a later
+    minor revision and read them back missing whatever that revision added.
+    """
     with pytest.raises(SchemaVersionError):
-        store.append(_record(schema_version=_UNREADABLE_SCHEMA_VERSION))
+        store.append(_record(schema_version=version))
 
 
 def test_the_store_stamps_the_version_this_build_writes() -> None:

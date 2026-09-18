@@ -87,8 +87,25 @@ def test_token_invalid_helper_covers_every_broker_refusal() -> None:
 
 
 def test_reason_codes_are_hashable_and_orderable() -> None:
-    """Records carry sorted collections of reasons, so both are required."""
+    """Records carry sorted collections of reasons, so both are required.
+
+    Sorting is what makes a record's reason list independent of the order the
+    resolver happened to collect them in. Without a total order the same
+    decision, made twice from the same inputs, would produce two records with
+    two digests, and a replay could not reproduce the record it is replaying
+    (``INV-09``). The ordering is therefore asserted, not merely exercised.
+    """
     a = ReasonCode(ReasonName.CLASS_HALTED)
     b = ReasonCode(ReasonName.RULE_FAILED, "WF-01")
+    c = ReasonCode(ReasonName.RULE_FAILED, "WF-02")
     assert len({a, b, ReasonCode(ReasonName.CLASS_HALTED)}) == 2
-    assert sorted([b, a])
+    # Same name, different subject: two distinct reasons. If the subject did not
+    # count towards identity, a record that de-duplicates its reason list would
+    # keep one failed rule and silently drop the other.
+    assert b != c
+    assert len({b, c}) == 2
+    assert sorted([b, a]) == [a, b]
+    # The subject participates in the order too: two failures of the same rule
+    # kind are different reasons, and a record must not be free to swap them.
+    assert sorted([c, b]) == [b, c]
+    assert sorted([c, a, b]) == [a, b, c]

@@ -8,9 +8,9 @@ import json
 import pytest
 
 from neuroharness.observability.logging import (
+    REDACTED,
     _SAFE_KEYS,
     _SENSITIVE_KEYS,
-    REDACTED,
     bind_context,
     configure_logging,
     current_context,

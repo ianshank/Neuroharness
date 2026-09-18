@@ -46,6 +46,11 @@ from neuroharness.version import SchemaCompatibility, SchemaKind
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "registry" / "reference_deploy_registry.json"
 
+#: A registry version sharing its MAJOR component with the one this build reads
+#: and differing in the MINOR. Kept as a literal so the test still discriminates
+#: if the readable set is edited; ``test_schema_versions.py`` pins that set.
+UNKNOWN_MINOR_REGISTRY_VERSION = "1.9"
+
 DEPLOY = ("deployment.apply", "deploy_service")
 ROLLBACK = ("deployment.apply", "rollback")
 STATUS = ("deployment.status", "get_status")
@@ -200,6 +205,23 @@ def test_unreadable_schema_version_raises(document: dict[str, Any]) -> None:
     assert exc.value.reason_code.name is ReasonName.SCHEMA_INVALID
 
 
+def test_a_known_major_with_an_unknown_minor_is_refused_too(document: dict[str, Any]) -> None:
+    """The registry decides what is enforced, so half-understanding it is worst here.
+
+    Every other schema negative in this suite moves the MAJOR component, so a
+    build comparing only that would pass them all and still load a registry
+    written by a later minor revision. Whatever that revision added - a critic
+    binding, a halted flag, a new per-class field - would be dropped on the
+    floor, and the operator would believe a policy is in force that is not.
+    """
+    document["schema_version"] = UNKNOWN_MINOR_REGISTRY_VERSION
+    with pytest.raises(SchemaVersionError) as exc:
+        load_registry(resign(document), verifier=NullVerifier())
+    assert exc.value.schema_kind == SchemaKind.REGISTRY
+    assert exc.value.found_version == UNKNOWN_MINOR_REGISTRY_VERSION
+    assert exc.value.reason_code.name is ReasonName.SCHEMA_INVALID
+
+
 def test_schema_version_is_checked_before_integrity(document: dict[str, Any]) -> None:
     """An unreadable document cannot be meaningfully verified, so version comes first."""
     document["schema_version"] = "99.0"
@@ -224,7 +246,16 @@ def test_every_readable_version_is_accepted(document: dict[str, Any]) -> None:
 
 
 def test_digest_verifier_accepts_an_untampered_document(document: dict[str, Any]) -> None:
+    """A verifier that computed nothing at all would also pass a bare call.
+
+    ``verify`` returns ``None`` and signals only by raising, so calling it
+    proves the document was not rejected - not that anything was checked. The
+    property that matters to ``FR-33``/``SEC-05`` is that the digest the
+    document carries is the digest its content hashes to, so the test
+    recomputes it rather than trusting the absence of an exception.
+    """
     DigestVerifier().verify(document)
+    assert compute_registry_digest(document) == Digest(document["digest"])
 
 
 def test_digest_verifier_catches_a_tampered_policy_field(document: dict[str, Any]) -> None:

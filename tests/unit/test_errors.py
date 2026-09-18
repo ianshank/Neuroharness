@@ -20,6 +20,53 @@ from neuroharness.errors import (
     UnregisteredActionClassError,
 )
 from neuroharness.reason import ReasonName, TokenInvalidReason
+from neuroharness.version import SchemaKind
+
+
+#: Errors whose constructors ask for more than a message.
+_CONSTRUCTORS = {
+    "SchemaVersionError": lambda cls: cls(
+        schema_kind=SchemaKind.ENVELOPE, found_version="9.9", supported_versions=["1.1"]
+    ),
+    "UnregisteredActionClassError": lambda cls: cls("dns.update", "rotate_record"),
+}
+
+#: The rendered reason code each fail-closed error puts in the record, by class.
+#:
+#: Pinned as a table rather than derived from the classes, because the reason
+#: code *is* the record (Art. III). A type check - "it declares some reason" -
+#: passes just as happily when an error is remapped to the wrong one, and every
+#: judgement downstream reads the reason and not the exception type: whether an
+#: abstention may escalate to a human (5.5), whether it counts as
+#: infrastructure, what an operator is paged about. A new error class fails this
+#: test until its line is written here, which is where the mapping gets reviewed
+#: instead of inherited by accident.
+#:
+#: The token entries are the reason this table records the *rendered code* and
+#: not ``reason_name``: they carry a parameterised ``TOKEN_INVALID:<why>`` code
+#: built in :class:`TokenError`, while their inherited ``reason_name`` attribute
+#: still reads ``HARNESS_UNHEALTHY``. Anything reading the attribute instead of
+#: the code would label every broker refusal a harness fault.
+EXPECTED_REASON_CODES = {
+    "CanonicalizationError": "SCHEMA_INVALID",
+    "ClassHaltedError": "CLASS_HALTED",
+    "ClockUnavailableError": "CLOCK_UNAVAILABLE",
+    "EvidenceUnavailableError": "EVIDENCE_UNAVAILABLE",
+    "RegistryError": "REGISTRY_INTEGRITY_FAILED",
+    "RegistryIntegrityError": "REGISTRY_INTEGRITY_FAILED",
+    "RegistryValidationError": "REGISTRY_INTEGRITY_FAILED",
+    "SchemaVersionError": "SCHEMA_INVALID",
+    "TokenBundleStaleError": "TOKEN_INVALID:bundle_stale",
+    "TokenConsumedError": "TOKEN_INVALID:consumed",
+    "TokenDigestMismatchError": "TOKEN_INVALID:digest_mismatch",
+    "TokenError": "TOKEN_INVALID:signature",
+    "TokenExpiredError": "TOKEN_INVALID:expired",
+    "TokenModeMismatchError": "TOKEN_INVALID:mode_mismatch",
+    "TokenRevokedError": "TOKEN_INVALID:revoked",
+    "TokenSignatureError": "TOKEN_INVALID:signature",
+    "TokenVerdictMismatchError": "TOKEN_INVALID:verdict_mismatch",
+    "UnregisteredActionClassError": "ACTION_CLASS_UNREGISTERED",
+}
 
 
 def _fail_closed_subclasses() -> list[type[FailClosedError]]:
@@ -30,10 +77,36 @@ def _fail_closed_subclasses() -> list[type[FailClosedError]]:
     ]
 
 
+def _instantiate(cls: type[FailClosedError]) -> FailClosedError:
+    return _CONSTRUCTORS.get(cls.__name__, lambda c: c("refused"))(cls)
+
+
+def test_every_fail_closed_error_records_the_reason_it_is_declared_to() -> None:
+    """Article III: a decision that cannot be recorded was not made.
+
+    Equality against the whole table, in one assertion, so that both halves are
+    forced: an error class added without a reason fails because it is missing
+    from the table, and an error remapped to a different reason fails because
+    its value changed. Either would otherwise ship silently, and the record it
+    produces is the only account of the refusal anyone ever gets.
+    """
+    discovered = {
+        cls.__name__: _instantiate(cls).reason_code.render()
+        for cls in _fail_closed_subclasses()
+    }
+    assert discovered == EXPECTED_REASON_CODES
+
+
 @pytest.mark.parametrize("cls", _fail_closed_subclasses(), ids=lambda c: c.__name__)
 def test_every_fail_closed_error_declares_a_reason(cls: type[FailClosedError]) -> None:
-    """Article III: a decision that cannot be recorded was not made."""
+    """A reason code that is not a catalogue member cannot be put in a record.
+
+    ``SEC-07`` closes the catalogue precisely so that no free text reaches a
+    record or the repair channel, so the declared reason has to be a
+    :class:`ReasonName`, not a string that happens to look like one.
+    """
     assert isinstance(cls.reason_name, ReasonName)
+    assert _instantiate(cls).reason_code.name in ReasonName
 
 
 def test_schema_version_error_reports_what_it_can_read() -> None:

@@ -177,12 +177,28 @@ def constrained_pairs(draw: st.DrawFn) -> tuple[ResolutionRequest, ResolutionReq
     return base, after, mutation
 
 
+#: Examples per property. The higher count is for the monotonicity properties,
+#: whose input space is the cross product of every constraint the resolver can
+#: be handed; the lower one is for properties over a single request.
+_THOROUGH_EXAMPLES = 400
+_STANDARD_EXAMPLES = 200
+
+#: Derandomised on purpose. ``.hypothesis/`` is not kept in the repository, so a
+#: property failure found in CI is reproducible from a checkout only if the
+#: examples do not depend on a seed nobody saved. An invariant that fails once
+#: and then cannot be made to fail again gets closed as flaky, which is the
+#: worst outcome available for a safety property (``INV-09``). ``deadline=None``
+#: because these properties assert on verdicts, never on how long one took.
+_THOROUGH = settings(deadline=None, max_examples=_THOROUGH_EXAMPLES, derandomize=True)
+_STANDARD = settings(deadline=None, max_examples=_STANDARD_EXAMPLES, derandomize=True)
+
+
 def _enforced(resolution: Resolution) -> Verdict:
     """The verdict enforcement would have applied, whatever the class mode."""
     return resolution.verdict if resolution.shadow_verdict is None else resolution.shadow_verdict
 
 
-@settings(deadline=None, max_examples=400)
+@_THOROUGH
 @given(constrained_pairs())
 def test_adding_a_constraint_never_moves_the_verdict_toward_allow(
     pair: tuple[ResolutionRequest, ResolutionRequest, str],
@@ -197,7 +213,7 @@ def test_adding_a_constraint_never_moves_the_verdict_toward_allow(
     )
 
 
-@settings(deadline=None, max_examples=400)
+@_THOROUGH
 @given(constrained_pairs())
 def test_adding_a_constraint_never_creates_an_allow(
     pair: tuple[ResolutionRequest, ResolutionRequest, str],
@@ -212,7 +228,7 @@ def test_adding_a_constraint_never_creates_an_allow(
         assert before.verdict.permits_execution
 
 
-@settings(deadline=None, max_examples=400)
+@_THOROUGH
 @given(constrained_pairs())
 def test_the_enforced_verdict_is_monotone_too(
     pair: tuple[ResolutionRequest, ResolutionRequest, str],
@@ -228,7 +244,7 @@ def test_the_enforced_verdict_is_monotone_too(
     )
 
 
-@settings(deadline=None, max_examples=200)
+@_STANDARD
 @given(requests)
 def test_resolution_is_deterministic(request: ResolutionRequest) -> None:
     first = resolve(request)
@@ -236,7 +252,7 @@ def test_resolution_is_deterministic(request: ResolutionRequest) -> None:
         assert resolve(request) == first
 
 
-@settings(deadline=None, max_examples=400)
+@_THOROUGH
 @given(requests)
 def test_every_resolution_is_recordable(request: ResolutionRequest) -> None:
     """Section 5.6 and ``NFR-20``: a verdict that cannot be explained cannot be
@@ -249,7 +265,7 @@ def test_every_resolution_is_recordable(request: ResolutionRequest) -> None:
     assert all(line for line in resolution.explain)
 
 
-@settings(deadline=None, max_examples=400)
+@_THOROUGH
 @given(requests)
 def test_shadow_verdict_is_present_exactly_when_the_paths_can_differ(
     request: ResolutionRequest,
@@ -264,7 +280,7 @@ def test_shadow_verdict_is_present_exactly_when_the_paths_can_differ(
     assert (resolution.shadow_verdict is not None) is expected
 
 
-@settings(deadline=None, max_examples=200)
+@_STANDARD
 @given(requests)
 def test_soft_critics_never_change_the_verdict(request: ResolutionRequest) -> None:
     """Section 7: a soft critic's failure is recorded and nothing else."""
@@ -275,7 +291,7 @@ def test_soft_critics_never_change_the_verdict(request: ResolutionRequest) -> No
     assert resolve(request).verdict is resolve(without_soft).verdict
 
 
-@settings(deadline=None, max_examples=200)
+@_STANDARD
 @given(requests)
 def test_a_halted_class_denies_whatever_else_is_true(request: ResolutionRequest) -> None:
     """``ADR-0016``: halt is unconditional, and no input can talk it out of it."""
@@ -286,7 +302,7 @@ def test_a_halted_class_denies_whatever_else_is_true(request: ResolutionRequest)
     assert resolution.primary_reason == ReasonCode(ReasonName.CLASS_HALTED)
 
 
-@settings(deadline=None, max_examples=200)
+@_STANDARD
 @given(requests)
 def test_an_infrastructure_reason_is_never_escalated(request: ResolutionRequest) -> None:
     """Section 5.5: no configuration turns a dead engine into a rubber stamp."""
@@ -302,7 +318,7 @@ def test_an_infrastructure_reason_is_never_escalated(request: ResolutionRequest)
     assert not resolution.verdict.permits_execution
 
 
-@settings(deadline=None, max_examples=400)
+@_THOROUGH
 @given(requests)
 def test_approval_is_never_offered_to_a_non_approvable_class(
     request: ResolutionRequest,

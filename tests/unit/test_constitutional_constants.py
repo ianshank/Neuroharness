@@ -18,6 +18,7 @@ So the rule is split:
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from neuroharness import defaults
 from neuroharness.config import Settings
@@ -69,9 +70,30 @@ def test_settings_surface_is_the_declared_one() -> None:
 
 
 def test_repair_budget_ceiling_is_not_settable() -> None:
-    """Settings may lower the budget, never raise it past the constitutional max."""
-    with pytest.raises(Exception):
+    """Settings may lower the budget, never raise it past the constitutional max.
+
+    The exception type and message are named rather than caught as
+    ``Exception``: a bare catch passes on a ``TypeError`` from an unrelated
+    signature change, so deleting the ceiling itself would leave this test green
+    while an operator could set a repair budget of any size from the
+    environment - a loosening with no signature, no two-person review and no
+    record (``FR-48``, ``SEC-14``).
+    """
+    with pytest.raises(ValidationError, match="less than or equal to"):
         Settings(repair_budget=defaults.MAX_REPAIR_BUDGET + 1)
+
+
+def test_the_repair_budget_ceiling_itself_is_settable_up_to_the_maximum() -> None:
+    """The ceiling is a ceiling, not an off-by-one: the maximum is allowed.
+
+    A limit that refused its own documented maximum would push deployments to
+    raise ``MAX_REPAIR_BUDGET`` to get the value the specification already
+    permits, which is how a constitutional constant gets edited for an
+    operational reason.
+    """
+    assert Settings(repair_budget=defaults.MAX_REPAIR_BUDGET).repair_budget == (
+        defaults.MAX_REPAIR_BUDGET
+    )
 
 
 def test_infrastructure_reason_set_is_fixed_and_disjoint_from_escalatable() -> None:

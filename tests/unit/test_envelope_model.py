@@ -40,6 +40,12 @@ AT: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
 TRACE_ID: Final[str] = "4bf92f3577b34da6a3ce929d0e0e4736"
 ACTION_ID: Final[UUID] = UUID("018f3e5c-1a2b-7c3d-8e4f-000000000001")
 
+#: An envelope version sharing its MAJOR component with the one this build reads
+#: and differing in the MINOR. Kept as a literal so the test still discriminates
+#: if the readable set is edited; the companion assertion in
+#: ``test_schema_versions.py`` pins the readable set it is chosen against.
+UNKNOWN_MINOR_VERSION: Final[str] = "1.99"
+
 
 def digest(marker: int) -> str:
     """A syntactically valid ``sha256:`` digest, stable across runs."""
@@ -153,6 +159,22 @@ def test_unknown_schema_version_raises_schema_version_error() -> None:
         envelope(schema_version="9.9")
     assert raised.value.schema_kind == SchemaKind.ENVELOPE
     assert raised.value.found_version == "9.9"
+    assert raised.value.reason_code.render() == "SCHEMA_INVALID"
+
+
+def test_a_known_major_with_an_unknown_minor_is_refused_too() -> None:
+    """A minor revision is still a revision this build has not been taught.
+
+    The negative above changes the MAJOR component, as every other schema
+    negative in the suite does, so a build that compared only the major would
+    satisfy all of them while accepting an envelope written by a future minor.
+    It would then read that envelope with this build's field list: whatever the
+    newer minor added - a fact, a claim, a delegation hop a rule reads - is
+    absent, and the evaluation proceeds as if it had never existed.
+    """
+    with pytest.raises(SchemaVersionError) as raised:
+        envelope(schema_version=UNKNOWN_MINOR_VERSION)
+    assert raised.value.found_version == UNKNOWN_MINOR_VERSION
     assert raised.value.reason_code.render() == "SCHEMA_INVALID"
 
 

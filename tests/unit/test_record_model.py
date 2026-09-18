@@ -50,6 +50,11 @@ AT: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
 TRACE_ID: Final[str] = "4bf92f3577b34da6a3ce929d0e0e4736"
 RESOURCE_KEY: Final[str] = "service:example-api/target:production"
 
+#: A record version sharing its MAJOR component with the one this build reads and
+#: differing in the MINOR. Kept as a literal so the test still discriminates if
+#: the readable set is edited; ``test_schema_versions.py`` pins that set.
+UNKNOWN_MINOR_VERSION: Final[str] = "1.99"
+
 
 def digest(marker: int) -> str:
     """A syntactically valid ``sha256:`` digest, stable across runs."""
@@ -515,6 +520,20 @@ def test_unknown_record_schema_version_raises_schema_version_error() -> None:
         evaluation_record(schema_version="0.9")
     assert raised.value.schema_kind == SchemaKind.RECORD
     assert raised.value.reason_code.render() == "SCHEMA_INVALID"
+
+
+def test_a_known_major_with_an_unknown_minor_is_refused_too() -> None:
+    """The negative above moves the MAJOR; a lenient build only checks that one.
+
+    A record written by a later minor revision and read with this revision's
+    field list loses whatever that revision added. The record is the evidence,
+    so the field that goes missing is the one an auditor came for, and the loss
+    is silent: the document parsed, so nothing reports it (Art. II, Art. III).
+    """
+    with pytest.raises(SchemaVersionError) as raised:
+        evaluation_record(schema_version=UNKNOWN_MINOR_VERSION)
+    assert raised.value.schema_kind == SchemaKind.RECORD
+    assert raised.value.found_version == UNKNOWN_MINOR_VERSION
 
 
 @pytest.mark.parametrize(

@@ -32,6 +32,7 @@ from neuroharness.tokens.nonce import (
 START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
 TOKEN_ID = "tok-00000001"
 OTHER_TOKEN_ID = "tok-00000002"
+THIRD_TOKEN_ID = "tok-00000003"
 BROKER = "broker-1"
 TENANT = "acme"
 OTHER_TENANT = "globex"
@@ -54,6 +55,16 @@ OTHER_ENVELOPE = digest("other-envelope")
 #: Far enough past any token lifetime that a retention-based purge would have
 #: dropped the entry. Named rather than inlined so the intent is the constant.
 DAYS_WELL_PAST_ANY_TOKEN_LIFETIME = 365
+
+#: A token lifetime short enough that a test can step across the retention
+#: horizon one second at a time rather than simulating an hour.
+SHORT_TTL_SECONDS = 2
+
+#: A retention window strictly longer than that lifetime, as every real
+#: configuration is (the store's floor is ``retention >= ttl``). Longer than the
+#: ttl on purpose: a horizon computed from the wrong one of the two would still
+#: look right if they were equal.
+SHORT_RETENTION_SECONDS = 6
 
 
 def claim(
@@ -182,6 +193,101 @@ class TestReplay:
         store = InMemoryNonceStore()
         consume(store)
         assert consume(store, broker_id="broker-2").is_replay
+
+
+class TestRetention:
+    """How long a spent nonce is remembered, and what the purge takes with it.
+
+    The store's memory is bounded by age and never by count: evicting the oldest
+    entries under pressure would forget nonces exactly when the system is
+    busiest, which is when a replay is least likely to be noticed. The window is
+    what makes forgetting safe at all, so where it ends is a property, not an
+    implementation detail.
+    """
+
+    def test_a_replay_at_the_retention_horizon_is_still_a_replay(self) -> None:
+        """An entry dropped one second early is a replay that dispatches.
+
+        The horizon runs from the first consumption. A store that forgot an
+        entry as it reached the window, rather than after it, would have nothing
+        left to compare against for the last presentation it exists to refuse -
+        and a token the store has never seen is a first use, which executes.
+        """
+        store = InMemoryNonceStore(
+            ttl_seconds=SHORT_TTL_SECONDS, retention_seconds=SHORT_RETENTION_SECONDS
+        )
+        consume(store)
+
+        at_horizon = START + timedelta(seconds=SHORT_RETENTION_SECONDS)
+        assert consume(store, at=at_horizon) is ConsumeOutcome.REPLAY
+        entry = store.entry_for(TOKEN_ID)
+        assert entry is not None
+        assert entry.first_consumed_at == START
+
+    def test_an_entry_is_forgotten_only_once_past_the_horizon(self) -> None:
+        """Bounded memory is a real requirement; where the bound bites is the risk.
+
+        Forgetting is safe only because the window outlasts any token that could
+        still be presented, so a purge driven by the wrong duration - the token
+        lifetime rather than the retention window, say - would drop entries
+        while the tokens that wrote them are still verifiable.
+        """
+        store = InMemoryNonceStore(
+            ttl_seconds=SHORT_TTL_SECONDS, retention_seconds=SHORT_RETENTION_SECONDS
+        )
+        consume(store)
+
+        past_horizon = START + timedelta(seconds=SHORT_RETENTION_SECONDS + 1)
+        assert consume(store, at=past_horizon) is ConsumeOutcome.FIRST_USE
+        entry = store.entry_for(TOKEN_ID)
+        assert entry is not None
+        assert entry.first_consumed_at == past_horizon
+
+    def test_the_purge_drops_only_the_entries_past_the_horizon(self) -> None:
+        """One token ageing out must not take a live token's entry with it.
+
+        The purge runs on every consumption, so it runs while other tokens are
+        mid-flight. A purge that cleared more than it should would silently
+        re-arm every one of them: each would consume again as a first use.
+        """
+        store = InMemoryNonceStore(
+            ttl_seconds=SHORT_TTL_SECONDS, retention_seconds=SHORT_RETENTION_SECONDS
+        )
+        consume(store, token_id=TOKEN_ID)
+        later = START + timedelta(seconds=SHORT_RETENTION_SECONDS)
+        consume(store, token_id=OTHER_TOKEN_ID, at=later)
+
+        # An unrelated consumption, present only to run the purge under the lock.
+        consume(
+            store,
+            token_id=THIRD_TOKEN_ID,
+            at=START + timedelta(seconds=SHORT_RETENTION_SECONDS + 1),
+        )
+
+        assert store.entry_for(TOKEN_ID) is None
+        surviving = store.entry_for(OTHER_TOKEN_ID)
+        assert surviving is not None
+        assert surviving.first_consumed_at == later
+
+    def test_the_shortest_permitted_retention_still_outlasts_its_token(self) -> None:
+        """This overlap is the whole reason forgetting a nonce is safe (``FR-22``).
+
+        The floor the constructor enforces is ``retention >= ttl``, and an entry
+        is remembered through the instant ``retention`` seconds after it was
+        written. A token consumed at that instant was issued no later than it,
+        so it has already reached its own expiry, which the token service checks
+        before it consumes. Move either boundary in by one second and the two
+        windows stop overlapping: there is a moment at which the token still
+        verifies and the store has forgotten that it was spent.
+        """
+        store = InMemoryNonceStore(
+            ttl_seconds=SHORT_TTL_SECONDS, retention_seconds=SHORT_TTL_SECONDS
+        )
+        consume(store)
+
+        outcome = consume(store, at=START + timedelta(seconds=SHORT_TTL_SECONDS))
+        assert outcome is ConsumeOutcome.DUPLICATE_DELIVERY
+        assert not outcome.permits_dispatch
 
 
 class TestAtomicity:
