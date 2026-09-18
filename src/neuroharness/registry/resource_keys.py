@@ -10,13 +10,13 @@ A resource key is ``kind:id`` or a ``/``-joined path of such segments, for
 example ``service:checkout/target:production``. The grammar is deliberately
 narrow:
 
-* it is a subset of the reason-code subject charset in
-  :data:`neuroharness.reason.PARAMETERISED_REASONS` (section 5.6), because a
+* it is a subset of the reason-code subject charset (section 5.6), because a
   resource key is emitted verbatim as the subject of
   ``RESOURCE_BUSY:<resource_key>`` and ``EFFECT_MISMATCH:<resource_key>``. A key
   that cannot be rendered as a reason code is a key whose contention or effect
   mismatch could not be recorded, and an unrecorded decision was not made
-  (Constitution Art. III);
+  (Constitution Art. III). That claim used to be written here and was false in
+  both directions; it is now asserted at import in :mod:`neuroharness.grammar`;
 * it excludes ``_`` and any character outside ``[A-Za-z0-9.-]`` in identifiers
   for the same reason;
 * it is length-bounded so the rendered reason code stays inside the limit
@@ -35,6 +35,13 @@ from typing import Annotated, Any, Final
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from neuroharness.errors import RegistryValidationError
+from neuroharness.grammar import (
+    MAX_RESOURCE_KEY_LENGTH,
+    RESOURCE_ID_SOURCE,
+    RESOURCE_KEY_PATTERN,
+    RESOURCE_KIND_SOURCE,
+    anchored,
+)
 from neuroharness.models.common import FrozenMappingSerializer, FrozenMappingValidator
 
 __all__ = [
@@ -46,25 +53,18 @@ __all__ = [
     "render_template",
 ]
 
-#: A resource-key *kind* (the part before the colon): lowercase, hyphenated.
-_KIND = r"[a-z][a-z0-9-]{0,31}"
+# The grammar itself lives in :mod:`neuroharness.grammar`, alongside the
+# reason-code subject grammar it has to fit inside. It was spelled here, in
+# ``models/record.py``, in ``reason.py`` and in both published JSON Schemas, and
+# the four had drifted: this module admitted ``cluster-prod:svc-a`` and the
+# record model refused it, so a lease on a hyphenated resource kind could be
+# taken and never recorded. Re-exported under the names this module has always
+# used, so no caller moves.
+_KIND: Final[str] = RESOURCE_KIND_SOURCE
+_ID: Final[str] = RESOURCE_ID_SOURCE
 
-#: A resource-key *identifier* (the part after the colon). No underscore and no
-#: colon: both would make the key unparseable as a reason-code subject.
-_ID = r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}"
-
-#: ``kind:id(/kind:id)*`` -- the whole grammar, anchored.
-RESOURCE_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(
-    rf"^{_KIND}:{_ID}(?:/{_KIND}:{_ID})*$"
-)
-
-_KIND_PATTERN: Final[re.Pattern[str]] = re.compile(rf"^{_KIND}$")
-_ID_PATTERN: Final[re.Pattern[str]] = re.compile(rf"^{_ID}$")
-
-#: Upper bound on a rendered resource key. Chosen to fit inside the reason-code
-#: subject limit (section 5.6) so ``RESOURCE_BUSY:<resource_key>`` is always
-#: constructible.
-MAX_RESOURCE_KEY_LENGTH: Final[int] = 158
+_KIND_PATTERN: Final[re.Pattern[str]] = anchored(_KIND)
+_ID_PATTERN: Final[re.Pattern[str]] = anchored(_ID)
 
 #: ``{argument_name}`` placeholders in a ``resource_key_template``. Argument
 #: names follow Python identifier rules because they are envelope field names,

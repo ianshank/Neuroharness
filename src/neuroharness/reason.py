@@ -17,10 +17,11 @@ This module also encodes two sets the resolution procedure depends on:
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final
+
+from neuroharness.grammar import MAX_REASON_CODE_LENGTH, SUBJECT_PATTERN
 
 __all__ = [
     "ReasonName",
@@ -140,8 +141,13 @@ PARAMETERISED_REASONS: Final[frozenset[ReasonName]] = frozenset(
 
 # A subject is an identifier, never prose. This is the structural half of
 # SEC-07; the gateway additionally validates subjects against the registry.
-_SUBJECT_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,158}$")
-_MAX_RENDERED_LENGTH: Final[int] = 320
+#
+# Both come from `neuroharness.grammar`, which is also where `models.record`
+# and the published JSON Schemas get them. They used to be spelled here and
+# restated there, and the two spellings had drifted: a resource key this
+# module would happily carry as a subject was one the record model refused.
+_SUBJECT_PATTERN: Final = SUBJECT_PATTERN
+_MAX_RENDERED_LENGTH: Final[int] = MAX_REASON_CODE_LENGTH
 
 
 @dataclass(frozen=True, slots=True, order=True)

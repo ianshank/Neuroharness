@@ -45,6 +45,7 @@ from pydantic import (
     model_validator,
 )
 
+from neuroharness import grammar
 from neuroharness.defaults import MAX_DEMOTE_MODE_WINDOW_SECONDS, MAX_REPAIR_BUDGET
 from neuroharness.models.common import (
     ApprovalState,
@@ -75,7 +76,7 @@ from neuroharness.models.envelope import (
     VersionString,
     WireModel,
 )
-from neuroharness.reason import ReasonCode
+from neuroharness.reason import ReasonCode, TokenInvalidReason
 from neuroharness.version import SchemaCompatibility, SchemaKind
 
 __all__ = [
@@ -125,17 +126,28 @@ __all__ = [
 # resolves each subject against the registry, but a subject that is not even
 # identifier-shaped must never reach that stage, because prose smuggled into a
 # reason code is prose delivered to the governed model as an instruction.
-_RULE_ID_PATTERN: Final[str] = r"[A-Z]{2,6}-[0-9]{2,4}[a-z]?"
-_SNAKE_PATTERN: Final[str] = r"[a-z][a-z0-9_]*"
-_CRITIC_ID_PATTERN: Final[str] = r"[a-z][a-z0-9_]*(\.[a-z0-9_-]+)*"
-_PROPERTY_ID_PATTERN: Final[str] = r"[A-Z]{2,6}-[0-9]{2,4}[a-z]?(\.[a-z0-9_]+)?"
-_RESOURCE_KEY_PATTERN: Final[str] = (
-    r"[a-z][a-z0-9_]*:[A-Za-z0-9._-]+(/[a-z][a-z0-9_]*:[A-Za-z0-9._-]+)*"
-)
-_UUID_PATTERN: Final[str] = r"[0-9a-f-]{36}"
-_TOKEN_INVALID_PATTERN: Final[str] = (
-    r"expired|consumed|digest_mismatch|verdict_mismatch"
-    r"|mode_mismatch|bundle_stale|revoked|signature"
+# Every one of these comes from `neuroharness.grammar`. They used to be spelled
+# here as well as there, and the resource-key pair had drifted: this module's
+# kind segment admitted `_` and refused `-`, so `cluster-prod:svc-a` - a key the
+# signed registry accepts and the broker would lease on - could not be recorded,
+# and `RESOURCE_BUSY:cluster-prod:svc-a` failed the catalogue check. A lease
+# contention reached the operator as SCHEMA_INVALID, i.e. as a harness fault.
+_RULE_ID_PATTERN: Final[str] = grammar.RULE_ID_SOURCE
+_SNAKE_PATTERN: Final[str] = grammar.SNAKE_SOURCE
+_CRITIC_ID_PATTERN: Final[str] = grammar.CRITIC_ID_SOURCE
+_PROPERTY_ID_PATTERN: Final[str] = grammar.PROPERTY_ID_SOURCE
+_RESOURCE_KEY_PATTERN: Final[str] = grammar.RESOURCE_KEY_SOURCE
+_UUID_PATTERN: Final[str] = grammar.UUID_SOURCE
+
+# Derived from the enum rather than restated beside it. The catalogue had three
+# sources of truth - this alternation, `reason.TokenInvalidReason`, and the
+# published decision-record schema - so adding a ninth member meant a
+# coordinated edit across a Python enum, a Python regex and a JSON Schema. They
+# happened to agree; the cost was already being paid in that the catalogue was
+# effectively frozen by its own duplication. Now the enum is the source and the
+# schema is generated from it.
+_TOKEN_INVALID_PATTERN: Final[str] = "|".join(
+    reason.value for reason in TokenInvalidReason
 )
 
 #: Names that stand alone; every other name carries a shaped subject.
@@ -155,7 +167,11 @@ _BARE_REASON_NAMES: Final[tuple[str, ...]] = (
     "APPROVER_NOT_ELIGIBLE",
 )
 
-_REASON_CODE_ALTERNATIVES: Final[tuple[str, ...]] = (
+#: The closed catalogue as a list of anchored alternatives, in the order the
+#: published schema lists them. Public because `tools/render_schema_patterns.py`
+#: writes it into `docs/sdd/schemas/decision-record.schema.json` and
+#: `tests/unit/test_schema_patterns_are_generated.py` proves it has not drifted.
+REASON_CODE_ALTERNATIVES: Final[tuple[str, ...]] = (
     "|".join(_BARE_REASON_NAMES),
     rf"RULE_FAILED:{_RULE_ID_PATTERN}",
     rf"(FACT_MISSING|FACT_STALE|FACT_PROVIDER_ERROR):{_SNAKE_PATTERN}",
@@ -170,11 +186,11 @@ _REASON_CODE_ALTERNATIVES: Final[tuple[str, ...]] = (
 )
 
 _REASON_CODE_RE: Final[re.Pattern[str]] = re.compile(
-    "^(?:" + "|".join(f"(?:{alternative})" for alternative in _REASON_CODE_ALTERNATIVES) + ")$"
+    "^(?:" + "|".join(f"(?:{alternative})" for alternative in REASON_CODE_ALTERNATIVES) + ")$"
 )
 
 #: Rendered reason codes are bounded; the record is evidence, not a log sink.
-MAX_REASON_CODE_LENGTH: Final[int] = 320
+MAX_REASON_CODE_LENGTH: Final[int] = grammar.MAX_REASON_CODE_LENGTH
 
 
 def _coerce_reason_code(value: object) -> ReasonCode:
