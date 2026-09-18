@@ -121,6 +121,33 @@ Acceptance scenarios `A-19` (unregistered class abstains), `A-20` (hard critic
 error abstains), `A-21` (soft critic failure never changes a verdict) and `A-22`
 (clock unavailable abstains) are also executable here and are claimed.
 
+## 4a. CI stages this increment runs
+
+`06-delivery-and-governance.md` section 3 specifies twelve blocking stages.
+`.github/workflows/ci.yml` runs four of them, and runs only the ones with
+something real to check against the code that exists. A stage added ahead of
+the thing it checks is a green check proving nothing -- the same inversion
+section 1a of the evaluation plan added the `partial` fixture state to prevent,
+and it retires the pressure to build the real gate in exactly the same way.
+
+| Stage | Status here | Owner of the rest |
+|---|---|---|
+| 2. Unit tests with coverage | **Running**, floor at 90% lines and branches across the trusted computing base | Resolver 100% branches: see the open item below |
+| 4. Negative mutation fixtures | **Running**, and blocking with no override: every `active` fixture is killed, and the catalogue, the declarations and this plan are checked against each other | The remaining fixtures activate with their gates |
+| 10. Schema conformance | **Running** for the envelope and decision record, in both directions, plus a validity check on the published schemas | PDP input (asserts no `claims`) needs `P1-04` |
+| 11. Docs (partial) | **Running** as the constitutional-constants and no-magic-values scanners | Link check and ADR index consistency are unbuilt |
+| 1. Lint and type-check | Not running | `ruff` reports 168 findings on the current tree and `mypy --strict` has never been run; landing this stage is its own change, not a line in a workflow file |
+| 3. Policy unit tests, Regal | Not running | No `policy/` yet (`P1-15`) |
+| 5. Behaviour scenarios | Not running | pytest-bdd harness unbuilt |
+| 6. Integration (testcontainers) | Not running | Needs OPA, PostgreSQL, broker (`P1-04`, `P1-06a`, `P1-08`) |
+| 7. Golden replay | Not running | `P1-16` |
+| 8. Code mutation score | Not running | Blocking from Phase 2 by design |
+| 9. Security (CodeQL, pip-audit, gitleaks, Trivy) | Not running | `P0-10`, and several parts need repository-admin settings |
+| 12. Build, SBOM, provenance | Not running | `P0-10`; no container yet |
+
+Branch protection, commit signing and the Scorecard target are also `P0-10` and
+need repository-admin rights rather than a commit.
+
 ## 5. Acceptance for this increment
 
 1. The resolution truth table passes over a **declared finite abstraction** of the input (per-category presence flags rather than raw combinations, which are unbounded), and the table is checked in as reviewable data rather than derived by the same reading of §5.3 that produced the resolver.
