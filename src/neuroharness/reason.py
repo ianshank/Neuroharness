@@ -21,7 +21,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Final
 
-from neuroharness.grammar import MAX_REASON_CODE_LENGTH, SUBJECT_PATTERN
+from neuroharness.grammar import (
+    MAX_REASON_CODE_LENGTH,
+    MAX_SUBJECT_LENGTH,
+    SUBJECT_PATTERN,
+)
 
 __all__ = [
     "ReasonName",
@@ -89,6 +93,37 @@ class TokenInvalidReason(str, Enum):
     BUNDLE_STALE = "bundle_stale"
     REVOKED = "revoked"
     SIGNATURE = "signature"
+
+
+def _assert_every_reason_code_fits() -> None:
+    """The rendered-length guards are defence in depth, and that is now checked.
+
+    :class:`ReasonCode` and ``models.record`` both refuse a rendered code longer
+    than :data:`MAX_REASON_CODE_LENGTH`. Neither guard can fire: the longest
+    name is 25 characters, a subject is bounded at
+    :data:`~neuroharness.grammar.MAX_SUBJECT_LENGTH`, so the longest possible
+    rendering is 185 against a bound of 320.
+
+    The increment-1 review filed both under "provably unreachable, exclude from
+    the coverage gate". Shaping the code to reach the number would be worse than
+    the gap, and deleting the guards would leave nothing between a future
+    longer reason name and an over-length record. So the arithmetic is asserted
+    instead: add a reason name long enough to close the gap, or raise
+    ``MAX_SUBJECT_LENGTH``, and this fires at import rather than the guards
+    quietly becoming live on the path that needed them.
+    """
+    longest_name = max(len(name.value) for name in ReasonName)
+    longest_rendered = longest_name + len(":") + MAX_SUBJECT_LENGTH
+    if longest_rendered > MAX_REASON_CODE_LENGTH:
+        raise ValueError(
+            f"a reason code can now render to {longest_rendered} characters against a "
+            f"bound of {MAX_REASON_CODE_LENGTH}. The length guards in ReasonCode and "
+            "models.record are no longer unreachable: give them tests, and check "
+            "whether the record schema's maxLength still holds (SEC-07)."
+        )
+
+
+_assert_every_reason_code_fits()
 
 
 #: Abstentions that may never escalate to human approval (section 5.5).

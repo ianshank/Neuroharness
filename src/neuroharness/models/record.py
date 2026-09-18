@@ -860,7 +860,11 @@ class Override(WireModel):
                 f"demote_mode override is missing {', '.join(missing)}; a loosening "
                 "override must auto-expire and cite a ticket (FR-48)"
             )
-        assert self.expires_at is not None  # narrowed by the check above
+        if self.expires_at is None:  # pragma: no cover - narrowed by the check above
+            # Not an ``assert``: ``python -O`` strips those, and a stripped
+            # narrowing here would raise TypeError from the subtraction below
+            # instead of the typed refusal FR-48 owes an operator.
+            raise ValueError("demote_mode override has no expires_at (FR-48)")
         window = (self.expires_at - self.effective_at).total_seconds()
         if window <= 0:
             raise ValueError("override expires_at must be after effective_at (FR-48)")

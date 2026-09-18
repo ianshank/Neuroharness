@@ -31,6 +31,7 @@ from types import MappingProxyType
 from typing import Final, Protocol, runtime_checkable
 
 from neuroharness.defaults import DEFAULT_REPAIR_BUDGET
+from neuroharness.errors import ConfigurationError
 from neuroharness.models.common import FactStatus, Mode, Verdict, VerifierResult
 from neuroharness.reason import ReasonCode, ReasonName
 
@@ -163,6 +164,25 @@ class CriticOutcome:
         name = _CRITIC_REASON_BY_RESULT.get(self.result)
         return None if name is None else ReasonCode(name, self.critic_id)
 
+    @property
+    def indeterminate_reason_code(self) -> ReasonCode:
+        """The reason an indeterminate outcome abstains. Never ``None``.
+
+        Total over :attr:`is_indeterminate` by the import-time check at the foot
+        of this module, so it subscripts the table rather than calling ``.get``.
+        A :class:`KeyError` here would mean that check did not run.
+
+        This exists because the resolver's alternative was a ``None`` guard that
+        could never be taken, and whose untaken arm *silently dropped the
+        abstention reason from the record* - the quietest possible failure in a
+        system whose constitution says a decision that is not recorded was not
+        made. The guard looked like defence and was a hole waiting for a sixth
+        ``VerifierResult``. See ``resolve/resolver.py``.
+        """
+        if self.reason is not None:
+            return self.reason
+        return ReasonCode(_CRITIC_REASON_BY_RESULT[self.result], self.critic_id)
+
 
 # --- Facts -------------------------------------------------------------------
 
@@ -196,6 +216,15 @@ class FactState:
     def reason_code(self) -> ReasonCode | None:
         name = _FACT_REASON_BY_STATUS.get(self.status)
         return None if name is None else ReasonCode(name, self.name)
+
+    @property
+    def blocking_reason_code(self) -> ReasonCode:
+        """The reason a blocking fact abstains. Never ``None``.
+
+        Total over :attr:`blocks` by the import-time check below, for the same
+        reason as :attr:`CriticOutcome.indeterminate_reason_code`.
+        """
+        return ReasonCode(_FACT_REASON_BY_STATUS[self.status], self.name)
 
 
 # --- Action-class policy -----------------------------------------------------
@@ -351,3 +380,61 @@ class Resolution:
     @property
     def permits_execution(self) -> bool:
         return self.verdict.permits_execution
+
+
+# --- The nesting that held the resolver up, asserted ---------------------------
+
+
+def _assert_reason_tables_are_total() -> None:
+    """Every blocking input has a reason code, checked at import.
+
+    ``resolver.py`` used to narrow twice - ``if code is not None`` around the
+    critic abstention and around the fact abstention - and neither ``None`` arm
+    was ever taken. Coverage recorded them as unreachable partial branches and
+    the increment-1 review filed them under "provably unreachable, exclude from
+    the gate". They were not provable, and the proof they lacked is the point:
+
+    * :attr:`CriticOutcome.reason_code` returns ``None`` only when
+      ``_CRITIC_REASON_BY_RESULT`` misses. That table covers ``FAIL, UNKNOWN,
+      TIMEOUT, ERROR``; :attr:`VerifierResult.is_indeterminate` is ``UNKNOWN,
+      TIMEOUT, ERROR`` - a *subset*, by coincidence.
+    * :attr:`FactState.reason_code` returns ``None`` only when
+      ``_FACT_REASON_BY_STATUS`` misses. That table covers ``MISSING, STALE,
+      PROVIDER_ERROR``; the non-usable statuses are exactly those - again by
+      coincidence.
+
+    Two independently maintained tables happened to nest inside two enums, and
+    nothing said so. Add one ``VerifierResult`` whose ``is_indeterminate`` is
+    true, or one non-``FRESH`` ``FactStatus``, and the untaken arm goes live -
+    and its behaviour is to drop the abstention reason silently, so the record
+    would say the harness abstained and not why.
+
+    Asserting it here converts two untestable narrowings into one testable
+    invariant, and lets the accessors above be total. Import-time, like
+    :mod:`neuroharness.resolve.safety`'s verdict-rank guard, because the place
+    to discover an unranked verdict or an unnamed abstention is process start,
+    not the decision that needed it.
+    """
+    missing_results = sorted(
+        result.name for result in VerifierResult
+        if result.is_indeterminate and result not in _CRITIC_REASON_BY_RESULT
+    )
+    if missing_results:
+        raise ConfigurationError(
+            f"VerifierResult {missing_results} are indeterminate and have no entry in "
+            "_CRITIC_REASON_BY_RESULT, so a critic could abstain without a reason code "
+            "(section 5.6, INV-09)"
+        )
+    missing_statuses = sorted(
+        status.name for status in FactStatus
+        if not status.is_usable and status not in _FACT_REASON_BY_STATUS
+    )
+    if missing_statuses:
+        raise ConfigurationError(
+            f"FactStatus {missing_statuses} are not usable and have no entry in "
+            "_FACT_REASON_BY_STATUS, so a required fact could block without a reason "
+            "code (section 5.6, INV-09)"
+        )
+
+
+_assert_reason_tables_are_total()

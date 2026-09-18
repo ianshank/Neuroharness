@@ -172,14 +172,14 @@ def _resolve_pass(request: ResolutionRequest, *, honour_effective_modes: bool) -
     abstentions: list[tuple[ReasonCode, bool]] = []
     for outcome in blocking:
         if outcome.is_indeterminate:
-            code = outcome.reason_code
-            if code is not None:
-                abstentions.append((code, True))
+            # Unconditional. ``indeterminate_reason_code`` is total over
+            # ``is_indeterminate`` by the import-time check in ``inputs``; the
+            # ``if code is not None`` this replaced could never be taken, and
+            # its untaken arm dropped the abstention reason from the record.
+            abstentions.append((outcome.indeterminate_reason_code, True))
     for fact in request.fact_states:
         if fact.blocks:
-            code = fact.reason_code
-            if code is not None:
-                abstentions.append((code, fact.escalatable))
+            abstentions.append((fact.blocking_reason_code, fact.escalatable))
 
     #: Everything the harness could not evaluate, in a stable order. Carried by
     #: the denial steps so a record shows every problem, not only the decisive one.
