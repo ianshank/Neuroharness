@@ -1,0 +1,8 @@
+{
+  "id": "MUT-25",
+  "state": "reserved",
+  "phase": 1,
+  "gate": "SEC-13 delegation",
+  "mutation": "Chain hop with credential_status: unverified",
+  "expected": "DENY RULE_FAILED:WF-03"
+}

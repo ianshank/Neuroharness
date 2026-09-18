@@ -1,0 +1,10 @@
+{
+  "id": "MUT-26",
+  "state": "partial",
+  "phase": 1,
+  "gate": "FR-48 override authority",
+  "mutation": "Single-principal demote_mode",
+  "expected": "Rejected and recorded",
+  "owned_here": "Override authority validation rejects a single-principal demotion.",
+  "still_missing": "Delegation-chain eligibility, which needs session data (P1-10a)."
+}

@@ -1,0 +1,10 @@
+{
+  "id": "MUT-13",
+  "state": "partial",
+  "phase": 1,
+  "gate": "Write-ahead evidence",
+  "mutation": "Evidence store rejects write",
+  "expected": "No token; EVIDENCE_UNAVAILABLE",
+  "owned_here": "The pipeline refuses to issue a token when the record is not durable.",
+  "still_missing": "Real durability against a database (P1-06a)."
+}

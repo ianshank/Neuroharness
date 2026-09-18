@@ -1,0 +1,8 @@
+{
+  "id": "MUT-08",
+  "state": "reserved",
+  "phase": 2,
+  "gate": "Solver uncertainty",
+  "mutation": "Contract forced to timeout / unsupported theory",
+  "expected": "ABSTAIN SOLVER_*"
+}

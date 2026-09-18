@@ -1,0 +1,8 @@
+{
+  "id": "MUT-11",
+  "state": "reserved",
+  "phase": 1,
+  "gate": "Approval binding",
+  "mutation": "Repair after approval requested; then approve old request",
+  "expected": "Superseded; no token"
+}

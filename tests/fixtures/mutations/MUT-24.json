@@ -1,0 +1,8 @@
+{
+  "id": "MUT-24",
+  "state": "reserved",
+  "phase": 3,
+  "gate": "WF-06a monitor precedence",
+  "mutation": "Trajectory with executed(P) and no preceding approval_granted(P)",
+  "expected": "Monitor FAIL; DENY MONITOR_VIOLATION:WF-06a once certified (shadow-kill until then)"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "MUT-21",
+  "state": "partial",
+  "phase": 1,
+  "gate": "FR-80 mode-independent fail-closed",
+  "mutation": "Evidence store down in a **shadow** class",
+  "expected": "No shadow token, no execution, EVIDENCE_UNAVAILABLE",
+  "owned_here": "An infrastructure failure in a shadow class yields no token.",
+  "still_missing": "The broker confirming nothing executed (P1-08)."
+}

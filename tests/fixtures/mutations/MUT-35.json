@@ -1,0 +1,8 @@
+{
+  "id": "MUT-35",
+  "state": "reserved",
+  "phase": 2,
+  "gate": "FR-93 rate limit",
+  "mutation": "Eleventh new action in one hour for one session root",
+  "expected": "DENY REPAIR_RATE_LIMITED"
+}

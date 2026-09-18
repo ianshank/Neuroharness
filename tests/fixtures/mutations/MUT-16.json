@@ -1,0 +1,8 @@
+{
+  "id": "MUT-16",
+  "state": "reserved",
+  "phase": 1,
+  "gate": "Rollout mode",
+  "mutation": "Shadow-mode class with denying envelope",
+  "expected": "Record DENY, mode shadow; executed"
+}

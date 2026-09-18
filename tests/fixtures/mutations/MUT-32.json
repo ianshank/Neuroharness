@@ -1,0 +1,8 @@
+{
+  "id": "MUT-32",
+  "state": "reserved",
+  "phase": 2,
+  "gate": "FR-57 effect",
+  "mutation": "Receipt succeeded but the state fact disagrees",
+  "expected": "EFFECT_MISMATCH recorded and alerted"
+}

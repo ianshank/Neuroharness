@@ -1,0 +1,8 @@
+{
+  "id": "MUT-20",
+  "state": "active",
+  "phase": 1,
+  "gate": "FR-21 token mode/verdict",
+  "mutation": "Shadow token presented after promotion to enforce",
+  "expected": "Broker refuses TOKEN_INVALID:mode_mismatch"
+}

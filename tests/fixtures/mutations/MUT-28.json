@@ -1,0 +1,8 @@
+{
+  "id": "MUT-28",
+  "state": "reserved",
+  "phase": 2,
+  "gate": "FR-07 batch",
+  "mutation": "Batch member depends on a denied member",
+  "expected": "DENY BATCH_DEPENDENCY_DENIED:0"
+}

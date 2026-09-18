@@ -79,7 +79,6 @@ it adds a third lifecycle state to `05-evaluation-plan.md` §1a.
 
 | Fixture | Gate in this increment |
 |---|---|
-| `MUT-07` | Argument-schema validation rejects an undeclared argument before any evaluation (`FR-02`). |
 | `MUT-19` | Registry `halted` mode plus resolution step 0 (`FR-49`). |
 | `MUT-20` | Token carries mode; verification rejects a shadow token against an enforcing class (`FR-21`). |
 | `MUT-30` | Resource-key enumeration rejects `Production` and `prod-eu` (`FR-02`, `FR-34`, threat `T-17`). |
@@ -95,11 +94,28 @@ that layer and is *not* counted toward hard-gate coverage until its owner lands)
 | `MUT-13` | The pipeline refuses to issue a token when the record is not durable. | Real durability against a database (`P1-06a`). |
 | `MUT-21` | Infrastructure failure in a shadow class yields no token. | Broker confirming nothing executed (`P1-08`). |
 | `MUT-26` | Override authority validation rejects a single-principal demotion. | Delegation-chain eligibility, which needs session data (`P1-10a`). |
+| `MUT-07` | The registry refuses an action class whose `argument_schema` is open, so an undeclared argument has nowhere to hide. | The envelope builder validating an envelope's arguments against that schema (`P1-02`). |
+| `MUT-10` | Token verification recomputes the envelope binding and refuses a mismatch. | The broker recomputing the digest over what it is about to execute (`P1-08`). |
 
 **Returned to `reserved`** because their gate is the broker, the approval service
-or the repair-linkage store, none of which exist here: `MUT-10`, `MUT-15`,
-`MUT-16`, `MUT-22`, `MUT-31`, `MUT-35`. Everything else stays `reserved` as before,
+or the repair-linkage store, none of which exist here: `MUT-15`, `MUT-16`,
+`MUT-22`, `MUT-31`, `MUT-35`. Everything else stays `reserved` as before,
 including `MUT-12b`, which the first draft omitted from both lists.
+
+**Two corrections this build produced**, both found by making the lifecycle
+checkable (`tests/fixtures/mutations/`) rather than by re-reading the plan:
+
+- `MUT-07` was `active`. The registry does enforce the structural half -- an
+  action class whose `argument_schema` is open is refused at load, so there is
+  no class against which an undeclared argument would be legal. Nothing here
+  validates an envelope's arguments against that schema, which is the clause
+  the fixture names. `active` would have been a green stage proving a gate
+  nobody wrote, which is the inversion section 1a's `partial` state exists for.
+- `MUT-10` was `reserved` on the grounds that its gate is the broker. Half of
+  it is not: token verification already recomputes the envelope binding and
+  refuses a mismatch, and a test already killed it. A fixture that reads as
+  not-yet-built while a test proves otherwise understates coverage in every
+  document that quotes it.
 
 Acceptance scenarios `A-19` (unregistered class abstains), `A-20` (hard critic
 error abstains), `A-21` (soft critic failure never changes a verdict) and `A-22`

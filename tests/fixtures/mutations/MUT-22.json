@@ -1,0 +1,8 @@
+{
+  "id": "MUT-22",
+  "state": "reserved",
+  "phase": 1,
+  "gate": "FR-47 approval re-evaluation",
+  "mutation": "Approve, then let the CI fact expire before resolution",
+  "expected": "No token; approval void"
+}

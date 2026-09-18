@@ -1,0 +1,10 @@
+{
+  "id": "MUT-07",
+  "state": "partial",
+  "phase": 1,
+  "gate": "Schema",
+  "mutation": "Extra/malformed argument",
+  "expected": "SCHEMA_INVALID, no evaluation",
+  "owned_here": "The registry refuses an action class whose argument_schema is open, so an undeclared argument has nowhere to hide.",
+  "still_missing": "The envelope builder validating an envelope's arguments against that schema (P1-02)."
+}

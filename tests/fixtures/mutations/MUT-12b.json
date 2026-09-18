@@ -1,0 +1,8 @@
+{
+  "id": "MUT-12b",
+  "state": "reserved",
+  "phase": 1,
+  "gate": "Bundle integrity",
+  "mutation": "Bundle signature does not verify",
+  "expected": "ABSTAIN BUNDLE_INTEGRITY_FAILED; reload refused"
+}

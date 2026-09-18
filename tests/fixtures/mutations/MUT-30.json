@@ -1,0 +1,8 @@
+{
+  "id": "MUT-30",
+  "state": "active",
+  "phase": 1,
+  "gate": "FR-02 argument schema",
+  "mutation": "target: \"Production\" / \"prod-eu\"",
+  "expected": "DENY SCHEMA_INVALID"
+}
