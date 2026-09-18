@@ -204,3 +204,50 @@ def test_settings_are_frozen_and_reject_unknown_fields() -> None:
         Settings(not_a_real_setting=1)  # type: ignore[call-arg]
     # The original value survived the refused assignment.
     assert settings.token_ttl_seconds == defaults.DEFAULT_TOKEN_TTL_SECONDS
+
+
+def test_an_empty_prefix_is_refused() -> None:
+    """Claiming a namespace is only safe when there is one.
+
+    ``from_env`` treats every variable under its prefix as a setting and refuses
+    the ones it does not recognise. With an empty prefix that rule turns on the
+    whole environment: ``PATH`` and ``HOME`` become unknown settings and no
+    deployment starts. The parameter is public, so the guard is a real one
+    rather than a comment.
+    """
+    with pytest.raises(ConfigurationError, match="non-empty prefix"):
+        Settings.from_env({"PATH": "/usr/bin"}, prefix="")
+
+
+@pytest.mark.parametrize("level", ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
+def test_every_supported_log_level_is_accepted(level: str) -> None:
+    """The accept path, not only the reject path.
+
+    A validator tested only on what it refuses can be refusing everything and
+    still look correct.
+    """
+    assert Settings.from_env({"NEUROHARNESS_LOG_LEVEL": level}).log_level == level
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("1", True),
+        ("true", True),
+        ("YES", True),
+        ("on", True),
+        ("0", False),
+        ("false", False),
+        ("No", False),
+        ("off", False),
+    ],
+)
+def test_boolean_settings_accept_the_spellings_an_operator_writes(
+    value: str, expected: bool
+) -> None:
+    """A deployment manifest says ``true``; a shell script says ``1``.
+
+    Refusing either would be a startup failure over a spelling, and a
+    fail-closed harness that will not start is an outage.
+    """
+    assert Settings.from_env({"NEUROHARNESS_LOG_JSON": value}).log_json is expected

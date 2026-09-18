@@ -278,7 +278,12 @@ def test_a_threshold_rewritten_as_arithmetic_is_still_caught(
     blocked number shipped it - and the reviewer of that change would read a
     passing structural test as evidence the number had been through the rule.
     """
-    source = f"def decide(age_seconds):\n    if {expression}:\n        return 'STALE'\n    return 'FRESH'\n"
+    source = (
+        "def decide(age_seconds):\n"
+        f"    if {expression}:\n"
+        "        return 'STALE'\n"
+        "    return 'FRESH'\n"
+    )
     assert any(v.value == value for v in _planted_violations(tmp_path, source))
 
 

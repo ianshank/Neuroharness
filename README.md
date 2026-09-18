@@ -8,7 +8,11 @@ Neuroharness sits between an agent and the tools it wants to call. The agent pro
 
 ## Status
 
-**Phase: Specification (Spec-Driven Development), revision 2.** No runtime code exists yet. This repository holds the research input, two rounds of peer review, and the SDD package that implementation will be driven from. Round two put the specification through four adversarial reviews; the resulting v0.2 changed how approvals bind, how rollout modes interact with failure, how mutual exclusion is enforced, and what the project claims to verify.
+**Phase: increment 1, the deterministic core.** The specification package is at revision 2, and the part of the harness that is pure computation now exists in `src/neuroharness/`: the closed reason-code catalogue, the typed fail-closed error hierarchy, the injection seams, RFC 8785 canonicalization and the proposal and envelope digests, the action-class and resource-key registries, the verdict resolver, the token service, the hash-chained evidence store with its write-ahead log, and the pipeline that sequences resolve -> record -> token. Unit, property-based and mutation suites run against it: `PYTHONPATH=src python3 -m pytest`.
+
+**Not built yet:** every component that talks to something outside the process. The MCP gateway, the policy decision point client, the critic bank and the broker are absent, and with them the `policy/` bundles and the `critics/` packs; they attach to the core through the protocol seams it already defines. `docs/sdd/07-increment-1-plan.md` scopes the increment, and its section 4a lists which of the twelve specified CI stages run today and which do not.
+
+This repository also holds the research input and two rounds of peer review. Round two put the specification through four adversarial reviews; the resulting v0.2 changed how approvals bind, how rollout modes interact with failure, how mutual exclusion is enforced, and what the project claims to verify.
 
 ## Document map
 
@@ -25,6 +29,7 @@ Neuroharness sits between an agent and the tools it wants to call. The agent pro
 | `docs/sdd/04-threat-model.md` | Assets, adversaries, STRIDE analysis, controls and residual risk. | You are touching a trust boundary. |
 | `docs/sdd/05-evaluation-plan.md` | Metrics, quality gates, mutation matrix, benchmarks, replay protocol. | You are writing tests or reporting results. |
 | `docs/sdd/06-delivery-and-governance.md` | SDLC process: branching, CI gates, DoR/DoD, policy change management, progressive rollout, compliance mapping, RACI, risk register. | You are shipping or governing a change. |
+| `docs/sdd/07-increment-1-plan.md` | What increment 1 builds, what it deliberately excludes, and which CI stages that leaves running. | You want to know which parts of the harness exist. |
 | `docs/sdd/adr/` | Architecture Decision Records (MADR format). | You want to know *why* a decision was made, or you are proposing to change one. |
 | `docs/sdd/schemas/` | JSON Schema (2020-12) for the action envelope and decision record. | You are producing or consuming harness data. |
 

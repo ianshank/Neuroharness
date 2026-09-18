@@ -112,7 +112,17 @@ class Settings(BaseModel):
         variable that is deliberately *not* a setting would have to be declared
         here, which is the point: the exemption would be reviewable instead of
         being an environment nobody audited.
+
+        ``prefix`` may not be empty, for the same reason stated the other way
+        round: claiming a namespace is only safe when there is one. An empty
+        prefix would make every variable in the process a candidate setting and
+        refuse the whole environment.
         """
+        if not prefix:
+            raise ConfigurationError(
+                "from_env needs a non-empty prefix; an empty one would claim the "
+                "whole environment as settings and refuse every variable in it"
+            )
         env = os.environ if environ is None else environ
         known = {f"{prefix}{name.upper()}": name for name in cls.model_fields}
 

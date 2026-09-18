@@ -17,6 +17,7 @@ from neuroharness.observability.logging import (
     _JsonFormatter,
     _MAX_EVENT_LENGTH,
     _MAX_EXCEPTION_CAUSES,
+    _scrub_event,
     _SAFE_KEYS,
     _SENSITIVE_KEYS,
     bind_context,
@@ -210,23 +211,23 @@ def test_unknown_context_fields_are_ignored_rather_than_crashing() -> None:
 #: event code. The rule is only cheap to keep because that is true.
 SRC = Path(__file__).resolve().parents[2] / "src" / "neuroharness"
 
-#: The structured logger's levels, and the names a logger is held under.
+#: The levels a logger is called at, and so the calls the scan looks for.
 LOGGER_METHODS = frozenset({"debug", "info", "warning", "error", "critical"})
 
 #: Shapes the package writes today: a dotted namespace, a deep one, and the flat
 #: underscored form the token service uses.
 EVENT_CODES_IN_USE = ("pipeline.evaluated", "evidence.wal.replay.failed", "token_issued")
 
-#: Spellings that are not event codes. Each is a way free text arrives: a
-#: sentence, an interpolated identifier, a rendered verdict, a credential, an
-#: empty event, an opaque string too long to be a name.
+#: Ways free text arrives in an event, each carrying the canary so its absence
+#: from the stream means something: a sentence, an interpolated identifier, a
+#: code with a rendered value stuck on the end, an opaque value logged as the
+#: event itself, and one too long to be a name.
 NOT_EVENT_CODES = (
-    "leaked secret sk-ABCDEF123456",
-    "refused action act-1",
-    "pipeline.evaluated: ALLOW",
-    "sk-ABCDEF123456",
-    "",
-    "e" * (_MAX_EVENT_LENGTH + 1),
+    f"leaked secret {CANARY}",
+    f"refused action {CANARY}",
+    f"pipeline.evaluated: {CANARY}",
+    CANARY,
+    CANARY + "e" * _MAX_EVENT_LENGTH,
 )
 
 
@@ -242,17 +243,17 @@ def _logger_call_events(tree: ast.Module) -> list[tuple[int, ast.expr]]:
     """Return the first argument of every logger call in a parsed module."""
     literals: dict[str, str] = {}
     for node in ast.walk(tree):
-        targets: list[ast.expr] = []
         if isinstance(node, ast.Assign):
-            targets = list(node.targets)
+            targets: list[ast.expr] = list(node.targets)
         elif isinstance(node, ast.AnnAssign):
             targets = [node.target]
-        value = getattr(node, "value", None)
-        if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+        else:
+            continue
+        if not isinstance(node.value, ast.Constant) or not isinstance(node.value.value, str):
             continue
         for target in targets:
             if isinstance(target, ast.Name):
-                literals[target.id] = value.value
+                literals[target.id] = node.value.value
 
     found: list[tuple[int, ast.expr]] = []
     for node in ast.walk(tree):
@@ -271,8 +272,6 @@ def _logger_call_events(tree: ast.Module) -> list[tuple[int, ast.expr]]:
 
 def _non_code_events(path: Path) -> list[str]:
     """Report every logger call in ``path`` whose event is not a literal code."""
-    from neuroharness.observability.logging import _scrub_event
-
     offences: list[str] = []
     for lineno, argument in _logger_call_events(ast.parse(path.read_text(encoding="utf-8"))):
         if isinstance(argument, ast.Name):
@@ -295,8 +294,21 @@ def test_free_text_in_an_event_never_reaches_the_sink(
     shipped verbatim to every sink the deployment feeds, which is the leak the
     field redaction exists to prevent.
     """
-    get_logger("neuroharness.test").info(f"{event} {CANARY}".strip())
+    get_logger("neuroharness.test").info(event)
     assert CANARY not in captured.getvalue()
+    assert _lines(captured)[0]["event"] == REDACTED_EVENT
+
+
+def test_an_empty_event_is_replaced_rather_than_emitted_blank(
+    captured: io.StringIO,
+) -> None:
+    """An event nobody can search for is a record nobody will find.
+
+    An empty event is not a code, and emitting it would leave a line in the
+    stream that no dashboard groups and no query matches - which is the same
+    outcome as dropping it, arrived at without anyone deciding to.
+    """
+    get_logger("neuroharness.test").info("")
     assert _lines(captured)[0]["event"] == REDACTED_EVENT
 
 
@@ -399,10 +411,11 @@ def test_the_exception_description_keeps_what_a_responder_needs(
     except EvidenceUnavailableError:
         get_logger("neuroharness.test").error("pipeline.evidence_unavailable", exc_info=True)
     error = _lines(captured)[0]["error"]
+    innermost = error["frames"][-1]
     assert error["type"] == "EvidenceUnavailableError"
     assert error["reason_code"] == "EVIDENCE_UNAVAILABLE"
-    assert error["frames"][-1]["func"] == "test_the_exception_description_keeps_what_a_responder_needs"
-    assert error["frames"][-1]["file"].endswith("test_logging_redaction.py")
+    assert innermost["func"] == test_the_exception_description_keeps_what_a_responder_needs.__name__
+    assert innermost["file"].endswith("test_logging_redaction.py")
     assert "durable" not in json.dumps(error)
 
 

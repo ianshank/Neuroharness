@@ -3,7 +3,9 @@
 This file is read by AI coding assistants. Keep it short and factual.
 
 ## What this repo is
-A fail-closed policy-and-verification harness for LLM agent tool calls. See `README.md` for the document map. The project is in the **specification phase**; there is no runtime code yet.
+A fail-closed policy-and-verification harness for LLM agent tool calls. See `README.md` for the document map. The specification package is at revision 2 and **increment 1, the deterministic core, is implemented** in `src/neuroharness/`: the closed reason-code catalogue, typed fail-closed errors, the injection seams, RFC 8785 canonicalization and the two digests, the action-class and resource-key registries, the verdict resolver, the token service, the hash-chained evidence store and its write-ahead log, and the pipeline that sequences them. Nothing that talks outside the process is built yet (gateway, PDP client, critics, broker). `docs/sdd/07-increment-1-plan.md` scopes the increment; its section 4a says which CI stages run.
+
+Tests: `PYTHONPATH=src python3 -m pytest`.
 
 ## Non-negotiables (from `docs/sdd/00-constitution.md`)
 1. The model proposes; the harness decides. No code path may let model output, model confidence, or model-generated text authorize an action.
@@ -24,14 +26,14 @@ A fail-closed policy-and-verification harness for LLM agent tool calls. See `REA
 - Do not put secrets, credentials, or real customer data in fixtures. Use the synthetic fixture generators described in the evaluation plan.
 - Do not include model identifiers or assistant attribution in code comments.
 
-## Where things will live (once implementation starts)
+## Where things live
 ```
-src/neuroharness/    runtime core: reason, errors, defaults, seams, config,
+src/neuroharness/    built: reason, errors, defaults, seams, config,
                      observability, models, canonical, registry, resolve,
-                     tokens, evidence, pipeline; then gateway, PDP client,
-                     critics, broker
-policy/              Rego bundles + tests + mutation fixtures
-critics/             Z3 contract packs, Prolog rulebase, FSA specs
-fixtures/            replay trajectories, negative mutations, golden decisions
+                     tokens, evidence, pipeline
+                     not built: gateway, PDP client, critics, broker
+tests/               unit, property, mutation, and the fixtures they read
 docs/sdd/            the spec-driven development package (source of truth)
+policy/              not built: Rego bundles + tests + mutation fixtures
+critics/             not built: Z3 contract packs, Prolog rulebase, FSA specs
 ```
