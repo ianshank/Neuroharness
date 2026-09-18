@@ -170,13 +170,23 @@ Everything here was deferred as "`P0-10`", and each piece has been re-checked ag
 | `.pre-commit-config.yaml` | Absent | Do it; it is where the ratchets live locally |
 | CodeQL default setup, Trivy, branch protection, Scorecard, SBOM/provenance/cosign | Need repository-admin settings or a container | **Correctly deferred.** Named here so the deferral is a decision |
 
-### 5.4 Two items that are not engineering tasks — escalations to the sponsor
+### 5.4 Escalations to the sponsor — items no engineering work unblocks
+
+Two here, and a third in §5.5.
 
 **`P0-12` — name the humans.** No workflow owner, no second security reviewer, no compliance contact, no agent-developer contact, no override group. The consequence is not administrative: `P1-15` requires two-person review of hard-gate policy, `05-evaluation-plan.md` §3's labelling protocol requires "the policy owner and the named workflow owner", `OQ-05` (retention) is owned by "Compliance", and `P0-01`/`P0-07` require signatures. **Nothing in this project can be approved until people exist.** No engineering work unblocks this.
 
 **`P0-13` — provision KMS, object storage, a staging cluster and CI service identities.** The single highest-fan-out missing item overall: it gates `P1-01a` (gateway, mTLS), `P1-07`-for-real, therefore `P1-08`, therefore `P1-13`, `P1-25`, `P1-26`, `P1-28` and transitively `P1-14`, `P1-19`, `P1-23`. It owns three of the six `partial` fixtures. And it cannot be produced from inside this repository. Note the current state is correct rather than broken: `Settings.signing_algorithm` defaults to ECDSA P-256, `default_signer_registry` registers HMAC only, so `signer_for_settings` refuses to start a default deployment. That is the right failure direction. It is also a hard precondition, and it should be stated as one rather than discovered.
 
-### 5.5 Governance hygiene that the gate implies
+### 5.5 The branching model does not exist, and the repository has no review gate
+
+`CLAUDE.md` says *"Trunk-based: short-lived branches off `main`, squash-merge"*. Measured: **the repository has exactly one branch, and it is the default branch.** `main` was created for PR #1, merged, and then deleted; PR #2 merged it back into the working branch. There is now nothing for a pull request to target, so every commit lands on trunk with no review gate at all.
+
+This is not cosmetic. `06-delivery-and-governance.md` requires two-person review for hard-gate policy changes (`P1-15`) and `CLAUDE.md` restates it. A repository where no pull request can be opened cannot satisfy a two-person review requirement, and increment 2 changes a published JSON Schema (§4.1) and a public return shape (§4.3) — exactly the changes that should not land unreviewed.
+
+**This is the sponsor's decision, not an engineering task**, because it determines what the branch protection in `P0-10` protects: re-create `main` as the default and protected branch with the working branch reverting to a short-lived topic branch, or adopt a different model and amend `CLAUDE.md` and governance §3 to describe it. Either way, the documents and the repository must agree before branch protection is configured, or the protection will be configured against a model nobody uses.
+
+### 5.6 Governance hygiene that the gate implies
 
 - **All 21 ADRs are `Status: Proposed`.** The index's rule — accepted ADRs are immutable, supersede rather than edit — has therefore never once engaged, while `ADR-0020` and `ADR-0021` are in force in shipping code and `ADR-0014` was amended in place. Accept them, or the instrument is inert.
 - **`ADR-0011` and `ADR-0012` are index rows with no files.** An ADR-index consistency check (stage 11) catches this in about twenty lines and must tolerate the `Planned` state.
@@ -386,7 +396,7 @@ Measured against `b16f3ba` on 2026-09-18. Every number in this document comes fr
 | `jsonschema` in TCB | `grep -rn jsonschema src/ pyproject.toml` | dev-only extra, zero imports in `src/` |
 | Strip function | `grep -rn "stripped_proposal_keys\|def strip" src/` | a model field and its docstring; no implementation |
 | Lint tooling declared | `grep -n "ruff\|mypy\|Regal" pyproject.toml .github/workflows/ci.yml` | none; 4 CI jobs total |
-| `main` branch | `git branch -a` | `remotes/origin/main` exists |
+| Branch topology | `git fetch --prune && git remote show origin` | **`main` does not exist.** The repository has exactly one branch, `claude/sdd-plan-peer-review-i2v012`, which is also the default branch. A local `remotes/origin/main` ref survived the deletion and was stale; `--prune` removed it |
 
 ## Appendix B — corrections to existing documents
 
@@ -404,5 +414,5 @@ Each of these is a document asserting something the code contradicts. Fixing the
 | `02-technical-plan.md:399` | the same 100% claim | Same correction, second document |
 | `06-delivery-and-governance.md` §4 | dependencies pinned with `uv.lock` | No lockfile exists |
 | `docs/review/2026-09-18-…-findings.md` §3 | six active, four partial | 5 active, 6 partial, 26 reserved — the same document's §5 records the corrections that produce it |
-| `docs/review/2026-09-18-…-findings.md` §7 | no `main` branch exists; blocking for review | Closed; `origin/main` exists and PR #1 merged |
+| `docs/review/2026-09-18-…-findings.md` §7 | no `main` branch exists; blocking for review | **Still open, and worse.** `main` was created for PR #1, merged, and then deleted. The sole remaining branch is the default branch, so no pull request can target anything — see §5.5 |
 | `01-specification.md:663` | `OQ-03` open | `ADR-0019` chose ECDSA P-256; the provisioning (`P0-13`) is what remains open |
