@@ -93,10 +93,14 @@ class CriticOutcome:
     """One critic's or one policy rule's contribution to a decision.
 
     ``hard`` is the critic's declared blocking status in the registry;
-    ``effective_mode`` is the class mode already narrowed by the per-critic
-    mode. Both defaults are the strict ones: an outcome that forgets to say what
-    it is counts as a blocking critic in enforce, because the failure mode of
-    guessing "soft" is an unguarded execution.
+    ``effective_mode`` is the critic's own declared rollout mode. The class mode
+    does not narrow it: a class in shadow still resolves with its enforcing
+    critics blocking, and the broker - not the resolver - decides whether that
+    verdict stops anything (section 5.3 step 0, ``ADR-0016``).
+
+    Both defaults are the strict ones: an outcome that forgets to say what it is
+    counts as a blocking critic in enforce, because the failure mode of guessing
+    "soft" is an unguarded execution.
     """
 
     critic_id: str
@@ -115,7 +119,7 @@ class CriticOutcome:
     def counts_as_hard(self) -> bool:
         """True when this outcome may block (section 5.3 step 0).
 
-        A hard critic whose effective mode is ``shadow`` or ``advisory`` is
+        A hard critic whose own declared mode is ``shadow`` or ``advisory`` is
         treated as *soft* for resolution and its would-be effect is recorded
         instead (``ADR-0014``, ``ADR-0016``). This is the only place rollout
         mode touches the verdict: a demoted critic still runs, still records and

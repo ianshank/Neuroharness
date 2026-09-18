@@ -179,6 +179,8 @@ Default 3 iterations per `action_id`; configurable per action class, maximum 10.
 ### 5.5 `ABSTAIN` escalation
 `ABSTAIN` is terminal by default. An action class MAY declare `escalate_on: [<reason codes>]`; escalation is allowed only for `SOLVER_UNKNOWN`, `SOLVER_TIMEOUT`, and `FACT_MISSING`/`FACT_STALE` for facts the class marks `escalatable: true` (never for evidence facts marked `required: true`). Escalation applies only if **every** abstention reason present is escalatable and the class is `approvable`; the registry loader rejects `escalate_on` on a non-approvable class. The approver is shown every abstention reason.
 
+**Escalation is additionally refused while any hard critic has failed.** Without this rule the same softening the step order fixes reappears by another route: adding an abstention to a request that would have been `REPAIR` yields `REQUIRES_APPROVAL`, which is *less* safe on the safety order, and substantively it puts a human in front of an action a hard gate has already rejected. A human may be asked to decide what the harness could not evaluate; they may not be asked to overrule what it evaluated and refused.
+
 **Non-escalating infrastructure reasons (fixed set):** `POLICY_ENGINE_UNAVAILABLE`, `BUNDLE_INTEGRITY_FAILED`, `REGISTRY_INTEGRITY_FAILED`, `EVIDENCE_UNAVAILABLE`, `CLOCK_UNAVAILABLE`, `MONITOR_STATE_LOST`, `HARNESS_UNHEALTHY`, `CRITIC_ERROR`, `SCHEMA_INVALID`, `ACTION_CLASS_UNREGISTERED`.
 
 ### 5.6 Reason-code catalogue (closed)
@@ -672,6 +674,7 @@ Round-two finding IDs (`R2-S` security, `R2-C` consistency, `R2-D` delivery, `R2
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-09-18 | Initial draft derived from the research synthesis and the peer review. |
+| 0.6 | 2026-09-18 | §5.5 now refuses escalation while any hard critic has failed. Implementing the v0.5 reordering exposed a second softening of the same shape by a different route: an abstention added to a `REPAIR` escalated to `REQUIRES_APPROVAL`, asking a human to overrule a gate that had already refused. |
 | 0.5 | 2026-09-18 | A property test found §5.3 was not monotone: the repair-budget and approvability denials sat below the abstention steps, so adding an abstention softened a settled `DENY` into an `ABSTAIN`, which an approvable class could then escalate to human approval. Every `DENY`-deciding step now precedes every `ABSTAIN`-deciding one. |
 | 0.4 | 2026-09-18 | Implementation found §5.3 step 0 contradicted `INV-11` and `A-16`: as written, a shadow *class* demoted every hard critic, so the verdict itself became mode-dependent and a shadow class could never record the denial it exists to measure. Step 0 now demotes only on a critic's own declared mode. |
 | 0.3 | 2026-09-18 | Increment-1 review amendments: proposal-digest projection narrowed and declared as data (`ADR-0020`); rate-limit state added to the resolver's declared inputs so `REPAIR_RATE_LIMITED` has a home without breaking purity (`FR-05`, `FR-93`). |

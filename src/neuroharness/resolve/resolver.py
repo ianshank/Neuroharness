@@ -151,6 +151,7 @@ def _resolve_pass(request: ResolutionRequest, *, honour_effective_modes: bool) -
     # else was wrong as contributing reason codes, even though it did not need
     # them to decide.
     failures = tuple(outcome for outcome in blocking if outcome.is_failure)
+    repairable = tuple(outcome for outcome in blocking if outcome.is_repairable_failure)
     budget = min(policy.repair_budget, MAX_REPAIR_BUDGET)
     budget_spent = request.repair_iteration >= budget
 
@@ -206,11 +207,11 @@ def _resolve_pass(request: ResolutionRequest, *, honour_effective_modes: bool) -
     explain.append("step 2: rate limit not exhausted")
 
     # --- Step 3: repair budget exhausted ------------------------------------
-    if failures and budget_spent:
+    if repairable and budget_spent:
         return decided(
             Verdict.DENY,
-            (ReasonCode(ReasonName.REPAIR_BUDGET_EXHAUSTED), *_reasons_of(failures)) + unevaluated,
-            f"step 3: repairable hard FAIL from {_ids(failures)} but iteration "
+            (ReasonCode(ReasonName.REPAIR_BUDGET_EXHAUSTED), *_reasons_of(repairable)) + unevaluated,
+            f"step 3: repairable hard FAIL from {_ids(repairable)} but iteration "
             f"{request.repair_iteration} has reached the budget of {budget}",
         )
     explain.append(
@@ -283,11 +284,11 @@ def _resolve_pass(request: ResolutionRequest, *, honour_effective_modes: bool) -
     explain.append("step 6: nothing indeterminate; every required fact is fresh")
 
     # --- Step 7: repairable failure with budget remaining -------------------
-    if failures:
+    if repairable:
         return decided(
             Verdict.REPAIR,
-            _reasons_of(failures),
-            f"step 7: repairable hard FAIL from {_ids(failures)}; iteration "
+            _reasons_of(repairable),
+            f"step 7: repairable hard FAIL from {_ids(repairable)}; iteration "
             f"{request.repair_iteration} of budget {budget}; all counterexamples "
             "are returned together",
         )

@@ -26,6 +26,12 @@ As specified, the proposal digest covered the whole actor and the whole action-c
 Both JSON Schemas pin `schema_version` to a single value, while the compatibility matrix claimed to read two. A build that accepted a `1.0` envelope would then fail to validate it against the schema it validates against. A compatibility matrix that disagrees with the schema is worse than none, because it is believed.
 **Resolution:** the readable sets are single-valued until a `1.2` lands and the schema moves from a fixed value to an enumeration in the same change.
 
+### F-10 The same softening reappeared by a second route (High)
+**Found by:** implementing the F-02 reordering, then looking for the shape again rather than assuming one instance was the only one.
+Fixing the step order closed the path from `DENY` to `ABSTAIN`. It did not close the path from `REPAIR` to `REQUIRES_APPROVAL`: §5.5 as written permitted an escalatable abstention to escalate even when a hard critic had already failed. Adding an abstention to a request that would have been `REPAIR` therefore produced `REQUIRES_APPROVAL`, which is less safe on the safety order, and put a human in front of an action a hard gate had already rejected.
+The distinction that resolves it: a human may be asked to decide what the harness *could not evaluate*; a human may not be asked to overrule what it *evaluated and refused*.
+**Resolution:** escalation is refused while any hard critic has failed. Specification v0.6, with a killing fixture. The resolver's exhaustive search over 4,492,800 base/mutation pairs then found no further regressions of this shape.
+
 ## 2. Conflicts between the schemas and the specification
 
 ### F-05 `CriticKind.REGO` cannot be recorded (Medium, resolved as intended behaviour)
@@ -65,6 +71,7 @@ That is worth recording here for one reason: it is precisely the threat this pro
 | ID | Item | Owner | Blocking? |
 |---|---|---|---|
 | F-06 | Reason-code subject shape not validated per name at construction | Tech lead | No, fail-closed; fix in the review round |
+| — | §5.5's "never for facts marked `required: true`" is enforced by the registry loader, not the resolver, because only required facts abstain at all. Confirm that placement is intended. | Policy owner | No |
 | — | `ADR-0021` follow-up: registry `argument_schema` must reject a float for a policy-compared argument | Policy owner | No |
 | — | Digest test vectors remain provisional until both `ADR-0021` rules are in force | Tech lead | Yes, for publishing vectors |
 | — | Independent code review and test-quality review of this increment | Tech lead | Yes, before the increment is called done |

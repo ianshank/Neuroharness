@@ -1,21 +1,20 @@
 """Properties of the resolution procedure (``FR-05``, ``ADR-0014``, ``INV-09``).
 
-Two properties, and one documented exception that is itself a finding.
-
 **Monotonicity.** Adding an input that can only constrain an evaluation - a
 failing critic, an unusable required fact, an infrastructure failure, a rate
 limit, a rule that demands approval, another spent repair iteration - must never
-move the verdict toward ``ALLOW`` on the safety order.
+move the verdict toward ``ALLOW`` on the safety order. No exceptions: section
+5.3 decides every denial before every abstention precisely so that this holds
+unconditionally.
 
-The exception: a ``DENY`` decided at step 5 (repair budget exhausted) or step 6
-(approval not permitted) becomes an ``ABSTAIN`` when an abstention is added,
-because section 5.3 puts abstentions above both. ``ADR-0014`` claims plain
-monotonicity, but its own step order does not give it: ``ABSTAIN`` ranks below
-``DENY``. Neither verdict permits execution and neither issues a token, so the
-harness is not weakened - but the claim as written is false, and a test that
-quietly ordered around it would be hiding that. It is asserted here instead,
-narrowly: only those two ``DENY``s may soften, only to ``ABSTAIN``, and only
-when an abstention was added.
+An earlier draft of the procedure put the abstention steps above the repair
+budget and approvability checks, and this property is what found it. A ``DENY``
+for an exhausted repair budget softened to an ``ABSTAIN`` when an abstention was
+added, and an abstention on an escalatable fact in an approvable class escalates
+to ``REQUIRES_APPROVAL`` - so an agent that had spent its budget could let a
+required fact go stale and convert a settled denial into a request for human
+approval. Adding a problem bought a path to execution. The order was fixed; this
+test is what holds it fixed.
 
 **Determinism.** ``INV-09`` requires that the same canonical inputs always yield
 the same verdict. The resolver is pure, so this is cheap to check and catches
@@ -61,14 +60,6 @@ _DETERMINISM_RUNS: Final[int] = 50
 _CRITIC_IDS: Final[tuple[str, ...]] = ("critic.a", "critic.b", "critic.c")
 _FACT_NAMES: Final[tuple[str, ...]] = ("fact.a", "fact.b")
 _RULE_ID: Final[str] = "rule.a"
-
-#: The DENYs that section 5.3 allows an added abstention to soften.
-_SOFTENABLE_DENIALS: Final[frozenset[ReasonName]] = frozenset(
-    {ReasonName.REPAIR_BUDGET_EXHAUSTED, ReasonName.APPROVAL_NOT_PERMITTED}
-)
-
-#: Mutations that add an abstention source rather than a denial.
-_ABSTAINING_MUTATIONS: Final[frozenset[str]] = frozenset({"critic", "infrastructure", "fact"})
 
 
 def _reason(name: ReasonName, subject: str = "subject.a") -> ReasonCode:
@@ -200,18 +191,10 @@ def test_adding_a_constraint_never_moves_the_verdict_toward_allow(
     before = resolve(base_request)
     after = resolve(harder_request)
 
-    if is_at_least_as_safe(after.verdict, before.verdict):
-        return
-
-    # The single permitted softening, characterised exactly (see module docstring).
-    assert (before.verdict, after.verdict) == (Verdict.DENY, Verdict.ABSTAIN), (
-        f"{mutation} moved {before.verdict.value} to {after.verdict.value}"
+    assert is_at_least_as_safe(after.verdict, before.verdict), (
+        f"adding a {mutation} moved the verdict from {before.verdict.value} "
+        f"to {after.verdict.value}, which is closer to execution"
     )
-    assert mutation in _ABSTAINING_MUTATIONS
-    assert before.primary_reason is not None
-    assert before.primary_reason.name in _SOFTENABLE_DENIALS
-    assert not before.verdict.permits_execution
-    assert not after.verdict.permits_execution
 
 
 @settings(deadline=None, max_examples=400)
@@ -236,14 +219,13 @@ def test_the_enforced_verdict_is_monotone_too(
 ) -> None:
     """Shadow data has to be monotone as well, or a rollout's false-block
     measurements would not predict what enforcement will do (``ADR-0016``)."""
-    base_request, harder_request, _ = pair
+    base_request, harder_request, mutation = pair
     before = _enforced(resolve(base_request))
     after = _enforced(resolve(harder_request))
 
-    if not is_at_least_as_safe(after, before):
-        assert (before, after) == (Verdict.DENY, Verdict.ABSTAIN)
-    if after.permits_execution:
-        assert before.permits_execution
+    assert is_at_least_as_safe(after, before), (
+        f"adding a {mutation} moved the enforced verdict from {before.value} to {after.value}"
+    )
 
 
 @settings(deadline=None, max_examples=200)

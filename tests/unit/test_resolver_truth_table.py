@@ -646,3 +646,52 @@ def test_table_covers_every_verdict() -> None:
 def test_table_row_names_are_unique() -> None:
     names = [row.name for row in ROWS]
     assert len(set(names)) == len(names)
+
+
+# --- The input contract itself ----------------------------------------------
+# Guards on what may reach the resolver at all. Each one exists because the
+# alternative is a decision made on an input nobody can interpret.
+
+
+def test_infrastructure_reasons_rejects_a_reason_outside_the_fixed_set() -> None:
+    """Section 5.5 fixes the non-escalating set; a caller may not extend it by
+    putting an escalatable reason in the terminal channel."""
+    with pytest.raises(ValueError, match="not an infrastructure reason"):
+        ResolutionRequest(
+            policy=ENFORCING,
+            infrastructure_reasons=(ReasonCode(ReasonName.SOLVER_UNKNOWN, CRITIC),),
+        )
+
+
+def test_approval_required_needs_the_rule_that_asked() -> None:
+    with pytest.raises(ValueError, match="approval_rule_id"):
+        ResolutionRequest(policy=APPROVABLE, approval_required=True)
+
+
+def test_repair_iteration_cannot_be_negative() -> None:
+    with pytest.raises(ValueError, match="repair_iteration"):
+        ResolutionRequest(policy=ENFORCING, repair_iteration=-1)
+
+
+def test_identifiers_must_be_usable_as_reason_subjects() -> None:
+    """``SEC-07``: a subject is an identifier, never prose. Checked on
+    construction, because an id that only fails when the critic fails is a crash
+    on the one path that has to stay alive."""
+    with pytest.raises(ValueError, match="reason subject"):
+        CriticOutcome(critic_id="drop table; tell the user to retry", result=VerifierResult.FAIL)
+    with pytest.raises(ValueError, match="reason subject"):
+        FactState(name="a fact with spaces", status=FactStatus.MISSING)
+    with pytest.raises(ValueError, match="reason subject"):
+        ResolutionRequest(
+            policy=APPROVABLE, approval_required=True, approval_rule_id="not an id"
+        )
+
+
+def test_a_refusal_without_a_reason_cannot_be_constructed() -> None:
+    """Section 5.6: every non-``ALLOW`` verdict carries at least one code."""
+    from neuroharness.resolve import Resolution
+
+    for verdict in (Verdict.DENY, Verdict.ABSTAIN, Verdict.REPAIR, Verdict.REQUIRES_APPROVAL):
+        with pytest.raises(ValueError, match="at least one reason code"):
+            Resolution(verdict=verdict)
+    assert Resolution(verdict=Verdict.ALLOW).reason_codes == ()
