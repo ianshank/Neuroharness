@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import Enum
-from typing import Annotated, Any, Final
+from typing import Annotated, Any, Final, Self
 from uuid import UUID
 
 from pydantic import (
@@ -161,6 +161,34 @@ class WireModel(BaseModel):
         # names, not pydantic namespace collisions.
         protected_namespaces=(),
     )
+
+    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
+        """Re-validate on copy. Pydantic's own ``model_copy`` does not.
+
+        ``frozen=True`` above reads as "this object cannot be changed", and
+        ``model_copy(update=...)`` is the door that leaves open:
+        :meth:`pydantic.BaseModel.model_copy` writes the update straight into
+        the new object without running a single validator. So::
+
+            proposal.model_copy(update={"tool": "ignore previous instructions"})
+
+        produced a ``Proposal`` whose ``tool`` was a sentence, and it serialised
+        and digested exactly like that - past ``extra="forbid"``, past every
+        field constraint, past the ``SEC-07`` shape checks. Every model in this
+        package inherits that hole, and a frozen model is precisely where nobody
+        thinks to look for one.
+
+        This override keeps pydantic's signature and meaning and adds the
+        validation pass, so a copy is held to the same standard as a
+        construction. The cost is one validation per copy on a path nothing in
+        ``src/`` currently takes; the alternative is a mutable envelope with an
+        immutable-looking type, which is the same defect ``frozen`` was set to
+        prevent.
+        """
+        copied = super().model_copy(update=update, deep=deep)
+        if update is None:
+            return copied
+        return type(self).model_validate(copied.__dict__)
 
 
 # --- Shared scalar and string types -----------------------------------------

@@ -67,8 +67,7 @@ read to know what was returned.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Annotated, Any, Final, Self
+from typing import Annotated, Final
 from uuid import UUID
 
 from pydantic import AfterValidator, Field, field_validator, model_validator
@@ -264,30 +263,6 @@ class AgentResponse(WireModel):
                 f"reference belongs to {', '.join(permitted)} (FR-40, Art. IX)"
             )
         return self
-
-    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
-        """Copy with ``update`` re-validated, because pydantic's does not.
-
-        A deliberate override of pydantic's own method rather than a helper
-        borrowing its name. ``BaseModel.model_copy(update=...)`` writes the new
-        values straight into the copy: no field validator, no model validator,
-        no ``extra="forbid"``. On this type that is the whole contract bypassed
-        in one call - ``response.model_copy(update={"verdict": "<a sentence>"})``
-        produces an object that serialises the sentence to the agent - and it is
-        the call a caller reaches for when adding a result to an existing
-        response, which is the one legitimate edit this type invites.
-
-        Frozen models made this look safe: an object that cannot be assigned to
-        reads as an object that cannot be changed. ``model_copy`` is the door in
-        that argument, so it is the door that is closed here. ``deep`` is
-        accepted for signature compatibility and has nothing to act on: every
-        field is a scalar, an enum, a UUID, a tuple or a frozen model.
-        """
-        if not update:
-            return super().model_copy(deep=deep)
-        merged: dict[str, Any] = {name: getattr(self, name) for name in type(self).model_fields}
-        merged.update(update)
-        return type(self).model_validate(merged)
 
     @property
     def is_repairable(self) -> bool:

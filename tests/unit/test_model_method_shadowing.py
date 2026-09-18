@@ -47,14 +47,19 @@ DELIBERATE_OVERRIDES: Final[frozenset[str]] = frozenset(
         # hook is for. Overriding it means implementing pydantic's contract, not
         # borrowing its name for something else.
         "model_post_init",
-        # ``AgentResponse`` re-validates a copy. Same signature, same meaning,
-        # one added guarantee: ``BaseModel.model_copy(update=...)`` writes values
-        # into the copy without running a single validator, which on the
-        # agent-facing response is the entire ``SEC-07`` contract bypassed by the
-        # one call a caller makes to attach a result to an existing response.
-        # Scoped, because a model that overrode ``model_copy`` to mean something
-        # else is exactly what the rest of this file is for catching.
-        "AgentResponse.model_copy",
+        # ``WireModel`` re-validates a copy. Same signature, same meaning, one
+        # added guarantee: ``BaseModel.model_copy(update=...)`` writes values
+        # into the copy without running a single validator, so
+        # ``proposal.model_copy(update={"tool": "<a sentence>"})`` produced a
+        # Proposal whose tool was prose - past ``extra="forbid"``, past every
+        # field constraint, past the ``SEC-07`` shape checks - and it serialised
+        # and digested exactly like that. ``frozen=True`` made it look
+        # impossible, which is why nobody looked.
+        #
+        # Declared once here, on the base, so every model in the package
+        # inherits the fix. Scoped, because a model that overrode ``model_copy``
+        # to mean something *else* is exactly what this file is for catching.
+        "WireModel.model_copy",
     }
 )
 
@@ -156,7 +161,7 @@ def test_a_scoped_override_licenses_only_the_class_it_names() -> None:
     method; only the one the entry names is allowed to.
     """
 
-    class AgentResponse(BaseModel):
+    class WireModel(BaseModel):
         def model_copy(self, *, update: object = None, deep: bool = False) -> BaseModel:
             return self
 
@@ -164,7 +169,7 @@ def test_a_scoped_override_licenses_only_the_class_it_names() -> None:
         def model_copy(self, *, update: object = None, deep: bool = False) -> BaseModel:
             return self
 
-    assert not _collisions(AgentResponse)
+    assert not _collisions(WireModel)
     assert _collisions(Other) == {"model_copy"}
 
 
