@@ -32,8 +32,17 @@ from neuroharness.resolve import (
 
 CRITIC = "critic.contract"
 OTHER_CRITIC = "critic.monitor"
-FACT = "deploy_state.in_flight"
-RULE = "rule.change_window"
+# A real fact name from the reference registry. It used to read
+# "deploy_state.in_flight", which no registry produces and which the record
+# catalogue has always refused: FACT_MISSING takes a snake_case fact name.
+# The resolver never looked, so the truth table was exercising the fact path
+# with a name whose refusal could never have been recorded.
+FACT = "deploy_state"
+# A requirement id, which is what APPROVAL_REQUIRED takes. It used to read
+# "rule.change_window" - critic-id shaped, which the record catalogue refuses
+# for this reason name. WF-06b is the change-window rule in the reference
+# registry, so the table now names the rule it is actually about.
+RULE = "WF-06b"
 
 PASS_HARD = CriticOutcome(critic_id=CRITIC, result=VerifierResult.PASS)
 SOFT_FAIL = CriticOutcome(
@@ -191,12 +200,12 @@ ROWS: tuple[Row, ...] = (
                     critic_id=CRITIC,
                     result=VerifierResult.FAIL,
                     repairable=False,
-                    reason=ReasonCode(ReasonName.MONITOR_VIOLATION, "prop.no_prod_outside_window"),
+                    reason=ReasonCode(ReasonName.MONITOR_VIOLATION, "WF-06b"),
                 ),
             )
         ),
         Verdict.DENY,
-        ReasonCode(ReasonName.MONITOR_VIOLATION, "prop.no_prod_outside_window"),
+        ReasonCode(ReasonName.MONITOR_VIOLATION, "WF-06b"),
     ),
     Row(
         "deny/non-repairable-beats-infrastructure-abstention",

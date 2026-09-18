@@ -45,6 +45,8 @@ from neuroharness.tokens.nonce import (
     InMemoryIssuanceLedger,
     InMemoryNonceStore,
     InMemoryRevocationList,
+    IssuanceEntry,
+    IssuanceEvidence,
     IssuanceLedger,
 )
 from neuroharness.tokens.service import MIN_TOKEN_TTL_SECONDS, ConsumeResult, TokenService
@@ -126,6 +128,7 @@ class Harness:
         tenant_id: str = TENANT,
         decision_id: str = DECISION,
         ttl_seconds: int | None = None,
+        issuance_evidence: IssuanceEvidence | None = None,
     ) -> SignedToken:
         return self.service.issue(
             decision_id=decision_id,
@@ -137,6 +140,7 @@ class Harness:
             mode=mode,
             verdict=verdict,
             ttl_seconds=ttl_seconds,
+            issuance_evidence=issuance_evidence,
         )
 
     def verify(self, signed: SignedToken, **overrides: object) -> DecisionToken:
@@ -403,6 +407,169 @@ class TestAtMostOneTokenPerDecision:
         minted = [signed for signed in results if signed is not None]
         assert len(minted) == 1
         assert len({signed.token.token_id for signed in minted}) == 1
+
+
+class RecordingEvidence:
+    """The ``token_issued`` record of one decision, as the mint sees it."""
+
+    def __init__(self) -> None:
+        self.holding: IssuanceEntry | None = None
+        self.writes = 0
+        self.failure: Exception | None = None
+
+    def recorded_issuance(self) -> IssuanceEntry | None:
+        return self.holding
+
+    def record_issuance(self, token: DecisionToken) -> None:
+        self.writes += 1
+        if self.failure is not None:
+            raise self.failure
+        self.holding = IssuanceEntry(
+            tenant_id=token.tenant_id,
+            decision_id=token.decision_id,
+            token_id=token.token_id,
+            envelope_digest=token.envelope_digest,
+            issued_at=token.issued_at,
+        )
+
+
+class NonRecordingLedger:
+    """An issuance ledger built to the older, narrower contract.
+
+    Present so the service's refusal to downgrade has something to refuse. It
+    satisfies :class:`IssuanceLedger` and nothing more, which is exactly the
+    ledger a deployment could still be wired with.
+    """
+
+    def __init__(self) -> None:
+        self.inner = InMemoryIssuanceLedger()
+
+    def claim(
+        self,
+        *,
+        tenant_id: str,
+        decision_id: str,
+        token_id: str,
+        envelope_digest: Digest,
+        now: datetime,
+    ) -> IssuanceEntry | None:
+        return self.inner.claim(
+            tenant_id=tenant_id,
+            decision_id=decision_id,
+            token_id=token_id,
+            envelope_digest=envelope_digest,
+            now=now,
+        )
+
+    def entry_for(self, *, tenant_id: str, decision_id: str) -> IssuanceEntry | None:
+        return self.inner.entry_for(tenant_id=tenant_id, decision_id=decision_id)
+
+
+class TestIssuanceRecordedAsTheClaim:
+    """``FR-23`` folded into the mint rather than bolted on after it (``D-5``).
+
+    ``issue`` used to take the claim on the ledger's own authority and leave the
+    caller to record the issuance afterwards. Those are two steps, and a failure
+    between them left a claim standing for a token that was never returned: the
+    ledger never purges, so the decision could never be minted again, and the
+    refusal was reported as an infrastructure reason that no human may escalate.
+    """
+
+    def test_the_record_is_written_as_part_of_the_mint(self) -> None:
+        evidence = RecordingEvidence()
+        harness = Harness()
+
+        signed = harness.issue(issuance_evidence=evidence)
+
+        assert evidence.writes == 1
+        assert evidence.holding is not None
+        assert evidence.holding.token_id == signed.token.token_id
+
+    def test_a_record_that_could_not_be_written_returns_no_token(self) -> None:
+        """``INV-05``, one record later: no evidence, no authorisation."""
+        evidence = RecordingEvidence()
+        evidence.failure = EvidenceUnavailableError("the store is down")
+        harness = Harness()
+
+        with pytest.raises(EvidenceUnavailableError):
+            harness.issue(issuance_evidence=evidence)
+
+    def test_the_outage_is_reported_as_an_outage_and_not_as_ill_health(self) -> None:
+        """``T-06``: the reason code has to name what actually happened.
+
+        The old shape reported the *next* attempt as ``HARNESS_UNHEALTHY``,
+        which is terminal and non-escalatable, so an operator reading the record
+        learned that the harness was unwell rather than that a store had blinked
+        and the decision could simply be retried.
+        """
+        evidence = RecordingEvidence()
+        evidence.failure = EvidenceUnavailableError("the store is down")
+        harness = Harness()
+
+        with pytest.raises(EvidenceUnavailableError) as caught:
+            harness.issue(issuance_evidence=evidence)
+
+        assert caught.value.reason_code.name is ReasonName.EVIDENCE_UNAVAILABLE
+
+    def test_the_decision_can_be_minted_after_the_outage_clears(self) -> None:
+        """The retry that had no test anywhere (``D-5``, increment plan §3.4)."""
+        evidence = RecordingEvidence()
+        evidence.failure = EvidenceUnavailableError("the store is down")
+        harness = Harness()
+
+        with pytest.raises(EvidenceUnavailableError):
+            harness.issue(issuance_evidence=evidence)
+
+        evidence.failure = None
+        signed = harness.issue(issuance_evidence=evidence)
+
+        assert signed.token.decision_id == DECISION
+        assert evidence.writes == 2, "the second attempt reached the store"
+        assert harness.consume(signed).permits_dispatch
+
+    @pytest.mark.mutation
+    def test_a_second_mint_is_still_refused_once_the_record_exists(self) -> None:
+        """Retryable must not mean mintable twice.
+
+        The failure mode the repair could easily have introduced: a decision
+        whose record landed is retried, nothing refuses it, and two tokens with
+        two lifetimes authorise one evaluation (``ADR-0008``).
+        """
+        evidence = RecordingEvidence()
+        harness = Harness()
+        first = harness.issue(issuance_evidence=evidence)
+
+        with pytest.raises(DuplicateIssuanceError):
+            harness.issue(issuance_evidence=evidence)
+
+        assert evidence.writes == 1
+        assert evidence.holding is not None
+        assert evidence.holding.token_id == first.token.token_id
+
+    def test_a_ledger_that_cannot_record_is_refused_rather_than_downgraded(self) -> None:
+        """Silently taking the two-step path would put the window back.
+
+        And it would put it back invisibly, in a deployment whose operator had
+        asked for the one-step path. A wiring defect is a
+        :class:`ConfigurationError` - the process should not run this way -
+        rather than a decision outcome.
+        """
+        harness = Harness(issuance_ledger=NonRecordingLedger())
+
+        with pytest.raises(ConfigurationError, match="one step"):
+            harness.issue(issuance_evidence=RecordingEvidence())
+
+    def test_the_older_two_step_path_is_unchanged(self) -> None:
+        """Backwards compatibility: no evidence, no behaviour change."""
+        ledger = InMemoryIssuanceLedger()
+        harness = Harness(issuance_ledger=ledger)
+
+        signed = harness.issue()
+
+        assert ledger.entry_for(tenant_id=TENANT, decision_id=DECISION) is not None
+        assert signed.token.decision_id == DECISION
+        with pytest.raises(DuplicateIssuanceError):
+            harness.issue()
 
 
 class TestVerify:

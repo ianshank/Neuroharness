@@ -76,7 +76,12 @@ from neuroharness.models.envelope import (
     VersionString,
     WireModel,
 )
-from neuroharness.reason import ReasonCode, TokenInvalidReason
+from neuroharness.reason import (
+    PARAMETERISED_REASONS,
+    SUBJECT_GRAMMAR,
+    ReasonCode,
+    ReasonName,
+)
 from neuroharness.version import SchemaCompatibility, SchemaKind
 
 __all__ = [
@@ -132,58 +137,58 @@ __all__ = [
 # signed registry accepts and the broker would lease on - could not be recorded,
 # and `RESOURCE_BUSY:cluster-prod:svc-a` failed the catalogue check. A lease
 # contention reached the operator as SCHEMA_INVALID, i.e. as a harness fault.
-_RULE_ID_PATTERN: Final[str] = grammar.RULE_ID_SOURCE
-_SNAKE_PATTERN: Final[str] = grammar.SNAKE_SOURCE
-_CRITIC_ID_PATTERN: Final[str] = grammar.CRITIC_ID_SOURCE
-_PROPERTY_ID_PATTERN: Final[str] = grammar.PROPERTY_ID_SOURCE
-_RESOURCE_KEY_PATTERN: Final[str] = grammar.RESOURCE_KEY_SOURCE
-_UUID_PATTERN: Final[str] = grammar.UUID_SOURCE
+# The per-name subject shapes used to live here as well as in `reason.py`, and
+# the two had come apart. They are now one map, `reason.SUBJECT_GRAMMAR`,
+# checked at construction and rendered into the published schema from the same
+# source - see `_reason_code_alternatives` below for what the divergence cost.
 
-# Derived from the enum rather than restated beside it. The catalogue had three
-# sources of truth - this alternation, `reason.TokenInvalidReason`, and the
-# published decision-record schema - so adding a ninth member meant a
-# coordinated edit across a Python enum, a Python regex and a JSON Schema. They
-# happened to agree; the cost was already being paid in that the catalogue was
-# effectively frozen by its own duplication. Now the enum is the source and the
-# schema is generated from it.
-_TOKEN_INVALID_PATTERN: Final[str] = "|".join(
-    reason.value for reason in TokenInvalidReason
+#: Names that stand alone. Derived: a name is bare exactly when it takes no
+#: subject, which ``reason.PARAMETERISED_REASONS`` already decides. Restating
+#: the list here is how it would come to disagree - and the catalogue is closed,
+#: so a name in neither set would be silently unrecordable.
+_BARE_REASON_NAMES: Final[tuple[str, ...]] = tuple(
+    sorted(name.value for name in ReasonName if name not in PARAMETERISED_REASONS)
 )
 
-#: Names that stand alone; every other name carries a shaped subject.
-_BARE_REASON_NAMES: Final[tuple[str, ...]] = (
-    "POLICY_ENGINE_UNAVAILABLE",
-    "BUNDLE_INTEGRITY_FAILED",
-    "REGISTRY_INTEGRITY_FAILED",
-    "EVIDENCE_UNAVAILABLE",
-    "CLOCK_UNAVAILABLE",
-    "MONITOR_STATE_LOST",
-    "HARNESS_UNHEALTHY",
-    "SCHEMA_INVALID",
-    "ACTION_CLASS_UNREGISTERED",
-    "CLASS_HALTED",
-    "REPAIR_BUDGET_EXHAUSTED",
-    "REPAIR_RATE_LIMITED",
-    "APPROVER_NOT_ELIGIBLE",
-)
 
-#: The closed catalogue as a list of anchored alternatives, in the order the
-#: published schema lists them. Public because `tools/render_schema_patterns.py`
-#: writes it into `docs/sdd/schemas/decision-record.schema.json` and
-#: `tests/unit/test_schema_patterns_are_generated.py` proves it has not drifted.
-REASON_CODE_ALTERNATIVES: Final[tuple[str, ...]] = (
-    "|".join(_BARE_REASON_NAMES),
-    rf"RULE_FAILED:{_RULE_ID_PATTERN}",
-    rf"(FACT_MISSING|FACT_STALE|FACT_PROVIDER_ERROR):{_SNAKE_PATTERN}",
-    rf"(SOLVER_UNKNOWN|SOLVER_TIMEOUT|CRITIC_ERROR):{_CRITIC_ID_PATTERN}",
-    rf"(APPROVAL_REQUIRED|APPROVAL_NOT_PERMITTED):{_RULE_ID_PATTERN}",
-    rf"APPROVAL_VOID:{_UUID_PATTERN}",
-    rf"MONITOR_VIOLATION:{_PROPERTY_ID_PATTERN}",
-    rf"(RESOURCE_BUSY|EFFECT_MISMATCH):{_RESOURCE_KEY_PATTERN}",
-    rf"RETRY_UNRESOLVED:{_UUID_PATTERN}",
-    rf"TOKEN_INVALID:({_TOKEN_INVALID_PATTERN})",
-    r"BATCH_DEPENDENCY_DENIED:[0-9]{1,2}",
-)
+def _reason_code_alternatives() -> tuple[str, ...]:
+    """The closed catalogue as anchored alternatives, built from one source.
+
+    Every subject shape comes from ``reason.SUBJECT_GRAMMAR``, which is also
+    what :class:`~neuroharness.reason.ReasonCode` checks at construction. They
+    used to be two lists, and they had come apart in a way that mattered: the
+    resolver's fallback for a hard critic that FAILs without its own reason is
+    ``RULE_FAILED:<critic_id>``, ``ReasonCode`` built it happily, and this
+    catalogue required a *rule id*. So the record writer refused a correct hard
+    ``DENY``, the pipeline turned that into ``ABSTAIN(SCHEMA_INVALID)``, and
+    nothing was recorded at all - which is the one outcome Article III says
+    cannot happen.
+
+    Names sharing a shape are grouped so the published schema stays readable,
+    and both the grouping and the order are deterministic, because this feeds
+    the generated JSON Schema.
+    """
+    by_shape: dict[str, list[str]] = {}
+    for name, source in SUBJECT_GRAMMAR.items():
+        by_shape.setdefault(source, []).append(name.value)
+
+    alternatives = ["|".join(_BARE_REASON_NAMES)]
+    for source in sorted(by_shape):
+        names = sorted(by_shape[source])
+        head = names[0] if len(names) == 1 else "(" + "|".join(names) + ")"
+        # ``(?:...)`` is load-bearing: `RULE_FAILED` and `TOKEN_INVALID` have a
+        # top-level ``|`` in their source, and unwrapped it would split the
+        # whole alternative - `RULE_FAILED:<rule>` OR a bare `<critic_id>` with
+        # no name at all, which would admit a reason code that is just an
+        # identifier.
+        alternatives.append(f"{head}:(?:{source})")
+    return tuple(alternatives)
+
+
+#: The closed catalogue as a list of anchored alternatives. Public because
+#: ``tools/render_schema_patterns.py`` writes it into the published schema and
+#: ``tests/unit/test_schema_patterns_are_generated.py`` proves it has not drifted.
+REASON_CODE_ALTERNATIVES: Final[tuple[str, ...]] = _reason_code_alternatives()
 
 _REASON_CODE_RE: Final[re.Pattern[str]] = re.compile(
     "^(?:" + "|".join(f"(?:{alternative})" for alternative in REASON_CODE_ALTERNATIVES) + ")$"
@@ -234,12 +239,12 @@ ReasonCodeField = Annotated[
 
 Scalar = bool | int | float | Annotated[str, StringConstraints(max_length=128)] | None
 
-RuleId = Annotated[str, StringConstraints(pattern=rf"^{_RULE_ID_PATTERN}$")]
+RuleId = Annotated[str, StringConstraints(pattern=rf"^{grammar.RULE_ID_SOURCE}$")]
 PropertyId = Annotated[
-    str, StringConstraints(pattern=rf"^{_PROPERTY_ID_PATTERN}$", max_length=64)
+    str, StringConstraints(pattern=rf"^{grammar.PROPERTY_ID_SOURCE}$", max_length=64)
 ]
 CriticId = Annotated[
-    str, StringConstraints(pattern=rf"^{_CRITIC_ID_PATTERN}$", max_length=64)
+    str, StringConstraints(pattern=rf"^{grammar.CRITIC_ID_SOURCE}$", max_length=64)
 ]
 CriticVersion = Annotated[str, StringConstraints(max_length=96)]
 JsonPointer = Annotated[

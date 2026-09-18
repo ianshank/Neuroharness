@@ -7,6 +7,15 @@ decision may be minted for at most once. Without it, ``TokenService.issue``
 called twice with identical arguments yields two distinct ``token_id`` values
 that both verify and both spend as a first use against the same envelope.
 
+A ledger that is a *second* store beside the evidence chain has a window the
+chain does not: the claim is taken, the ``token_issued`` record (``FR-23``) is
+written afterwards, and a failure in between leaves a claim standing for a
+token that was never returned. :class:`IssuanceEvidence` and
+:meth:`InMemoryIssuanceLedger.claim_recorded` close that window by making the
+record the claim - one step instead of two - rather than by compensating for it
+afterwards; see the :class:`InMemoryIssuanceLedger` docstring for why a
+compensating release cannot be made safe.
+
 The :class:`NonceStore` is the spending half. A short-lived, digest-bound token
 still authorises one execution *repeatedly* unless something remembers that it
 was spent, and ``FR-22`` fixes two properties of that memory:
@@ -37,6 +46,7 @@ from neuroharness import defaults
 from neuroharness.errors import FailClosedError
 from neuroharness.models.common import Digest
 from neuroharness.reason import ReasonName
+from neuroharness.tokens.model import DecisionToken
 
 __all__ = [
     "ConsumeOutcome",
@@ -45,7 +55,9 @@ __all__ = [
     "InMemoryNonceStore",
     "DuplicateIssuanceError",
     "IssuanceEntry",
+    "IssuanceEvidence",
     "IssuanceLedger",
+    "RecordingIssuanceLedger",
     "InMemoryIssuanceLedger",
     "RevocationScope",
     "RevocationList",
@@ -320,6 +332,24 @@ class DuplicateIssuanceError(FailClosedError):
     infrastructure reason, so it can never escalate to a human approval -
     correctly, because no human can vouch for a harness that just tried to
     authorise one decision twice.
+
+    **What it means now, and the one thing it no longer means.** On the recorded
+    path (:meth:`InMemoryIssuanceLedger.claim_recorded`) this error is raised
+    only when a durable ``token_issued`` record for the decision already exists,
+    so it always names a decision that genuinely was authorised once. It used to
+    have a second, indistinguishable cause: a claim left standing by an evidence
+    outage, which wedged the decision permanently and reported the wedge as an
+    outage of the wrong kind. That cause is gone - an evidence failure now
+    reports ``EVIDENCE_UNAVAILABLE``, which is what actually happened and what a
+    retry can clear.
+
+    Whether a *correct control working* should keep declaring
+    ``HARNESS_UNHEALTHY`` is a live question and the honest answer is probably
+    no: it is an infrastructure reason, so an operator dashboard and the
+    ``NFR-21`` correlated-failure alert read every duplicate refusal as harness
+    ill-health. The fix is one catalogue member, and it is deliberately not made
+    here: the reason catalogue is outside this change's scope, and swapping the
+    name is a one-line edit once that member exists.
     """
 
     reason_name = ReasonName.HARNESS_UNHEALTHY
@@ -374,11 +404,88 @@ class IssuanceLedger(Protocol):
 
         ``now`` comes from the caller's injected clock so that a replayed
         decision (``FR-71``) claims with the record's own timestamp.
+
+        The claim is taken on this ledger's own authority, so a caller that must
+        do something durable *after* minting - ``FR-23``'s ``token_issued``
+        record, for one - is responsible for the window between the two. A
+        caller that cannot own that window wants
+        :meth:`RecordingIssuanceLedger.claim_recorded`, which has none.
         """
         ...
 
     def entry_for(self, *, tenant_id: str, decision_id: str) -> IssuanceEntry | None:
         """Return the issuance recorded for a decision, for records and alerts."""
+        ...
+
+
+@runtime_checkable
+class IssuanceEvidence(Protocol):
+    """The durable ``token_issued`` record, read and written as the claim itself.
+
+    ``FR-23`` already requires that every issuance is appended as a
+    ``token_issued`` record. This protocol says that the record is not merely
+    written *after* the claim: it **is** the claim. An implementation reads and
+    writes one identified record - the issuance record of one
+    ``(tenant_id, decision_id)`` - and the ledger asks it, rather than its own
+    memory, whether that decision has been minted for.
+
+    Two obligations, and a ledger built on anything weaker is unsound:
+
+    1. :meth:`recorded_issuance` sees **every** durable issuance for that
+       decision, including ones written by another process, by a replay, or by
+       an attempt whose caller was told the write had failed. Absence must be a
+       proof of absence, not a cache miss.
+    2. :meth:`record_issuance` raises unless the record is durable. It may raise
+       when the record did in fact land - a timeout is allowed to lie in that
+       direction - because obligation 1 is what resolves the ambiguity on the
+       next attempt.
+    """
+
+    def recorded_issuance(self) -> IssuanceEntry | None:
+        """The issuance already durably recorded for this decision.
+
+        ``None`` means the chain holds no issuance record for it. Raising is the
+        third answer and the only honest one when durability cannot be read: an
+        unreadable chain is not an empty chain.
+        """
+        ...
+
+    def record_issuance(self, token: DecisionToken) -> None:
+        """Append the ``token_issued`` record for ``token`` (``FR-23``).
+
+        Returning means the record is durable. Raising a
+        :class:`~neuroharness.errors.FailClosedError` means it may not be, and
+        the caller must behave as though the mint never happened.
+        """
+        ...
+
+
+@runtime_checkable
+class RecordingIssuanceLedger(IssuanceLedger, Protocol):
+    """An issuance ledger that can take the claim and the record as one step.
+
+    Separate from :class:`IssuanceLedger` rather than folded into it, because
+    widening a protocol every implementation must satisfy is a breaking change
+    for implementations this package does not own. ``runtime_checkable`` is what
+    lets :class:`~neuroharness.tokens.service.TokenService` detect the capability
+    and refuse to pretend, rather than silently falling back to the two-step
+    path a caller asked it not to use.
+    """
+
+    def claim_recorded(
+        self,
+        *,
+        token: DecisionToken,
+        evidence: IssuanceEvidence,
+        now: datetime,
+    ) -> IssuanceEntry | None:
+        """Claim ``token``'s decision *by* recording its issuance.
+
+        Same return convention as :meth:`IssuanceLedger.claim`: ``None`` when
+        the claim succeeded and the holding :class:`IssuanceEntry` when it did
+        not. The difference is what a failure leaves behind - nothing, because
+        an issuance that could not be recorded did not happen.
+        """
         ...
 
 
@@ -397,6 +504,42 @@ class InMemoryIssuanceLedger:
     is indistinguishable from never having minted, so a purge would re-open the
     second-mint path the moment the first token expired - and a second mint is a
     *fresh* token with a fresh lifetime, which is the whole defect.
+
+    **The wedge that argument used to imply, and why it no longer does.**
+    :meth:`claim` takes the claim on its own authority, so a caller that records
+    the issuance afterwards - which ``FR-23`` requires it to - has a window: the
+    record write fails, the token is correctly withheld, and the claim stands
+    for a token nobody holds. Never purging then means that decision is
+    un-mintable forever. The two obvious repairs both fail against the paragraph
+    above. Releasing the claim on failure is a purge by another name, and
+    "provably never returned" is exactly what a crash between the two steps and
+    a store timeout cannot establish. Bounding the entries by age is the same
+    purge with a timer.
+
+    :meth:`claim_recorded` removes the window instead of compensating for it.
+    The claim and the ``token_issued`` record are one step: the entry is created
+    only once :class:`IssuanceEvidence` has made the record durable, and the
+    evidence - not this dictionary - is what a later attempt is checked against.
+    So there is nothing to release on failure, because nothing was claimed; and
+    forgetting stays impossible, because the entries here are a *cache of the
+    chain* rather than the record of the mint. The never-purge argument survives
+    intact: what changed is that the thing that must never be forgotten is now
+    the append-only evidence record, which cannot be forgotten by construction.
+
+    **Retention (``D-5``).** These entries are still never purged, and the
+    reason is now narrower than "we dare not". On the :meth:`claim` path a purge
+    is unsound for the reason above. On the :meth:`claim_recorded` path eviction
+    would be *safe* - a miss falls through to :meth:`IssuanceEvidence.recorded_issuance`
+    - but it is not implemented, because one class serves both paths and the
+    unsound reading is the one that costs a token. The durable answer is
+    therefore that the ledger has no retention policy of its own: it holds one
+    small entry per decision for the life of the process, and the retention that
+    actually governs at-most-once minting is the decision-record retention
+    (:data:`~neuroharness.defaults.DEFAULT_RECORD_RETENTION_DAYS`, ``NFR-16``),
+    because the issuance record is what the claim is derived from. That is
+    orders of magnitude longer than
+    :data:`~neuroharness.defaults.DEFAULT_TOKEN_TTL_SECONDS`, which is the
+    interval the purge argument is actually about.
     """
 
     __slots__ = ("_entries", "_lock")
@@ -425,6 +568,60 @@ class InMemoryIssuanceLedger:
                 decision_id=decision_id,
                 token_id=token_id,
                 envelope_digest=envelope_digest,
+                issued_at=moment,
+            )
+            return None
+
+    def claim_recorded(
+        self,
+        *,
+        token: DecisionToken,
+        evidence: IssuanceEvidence,
+        now: datetime,
+    ) -> IssuanceEntry | None:
+        """Claim ``token``'s decision by making its issuance record durable.
+
+        Three answers, in the order the lock sees them:
+
+        * this process already recorded an issuance for the key - refuse from
+          the cache, without touching the store;
+        * the chain holds one this process did not write (another gateway, a
+          replay, or an attempt whose caller was told the write had failed) -
+          adopt it and refuse. This is the branch that keeps a second mint
+          impossible across the ambiguous timeout, and the reason
+          :meth:`IssuanceEvidence.recorded_issuance` may not answer from a
+          cache;
+        * neither - write the record, and only then remember the claim.
+
+        The lock spans the write. That serialises minting within the process,
+        which the in-memory evidence store does anyway, and it is what makes the
+        read-then-write one step. A durable ledger replaces the whole method
+        with a unique constraint on ``(tenant_id, decision_id)`` applied in the
+        same transaction as the record insert, which is the same single step
+        with the same outcomes.
+
+        Nothing is written back on failure: an exception from either call leaves
+        the ledger exactly as it was, so the next attempt for this decision is a
+        first attempt again - checked, before it mints, against the record.
+        """
+        key = (token.tenant_id, token.decision_id)
+        moment = now.astimezone(UTC)
+        with self._lock:
+            existing = self._entries.get(key)
+            if existing is not None:
+                return existing
+
+            recorded = evidence.recorded_issuance()
+            if recorded is not None:
+                self._entries[key] = recorded
+                return recorded
+
+            evidence.record_issuance(token)
+            self._entries[key] = IssuanceEntry(
+                tenant_id=token.tenant_id,
+                decision_id=token.decision_id,
+                token_id=token.token_id,
+                envelope_digest=token.envelope_digest,
                 issued_at=moment,
             )
             return None

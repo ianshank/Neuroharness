@@ -11,6 +11,12 @@ from neuroharness.pipeline.decision import (
     DecisionContext,
     DecisionPipeline,
     EvaluationOutcome,
+    issuance_record_id,
 )
 
-__all__ = ["DecisionContext", "DecisionPipeline", "EvaluationOutcome"]
+__all__ = [
+    "DecisionContext",
+    "DecisionPipeline",
+    "EvaluationOutcome",
+    "issuance_record_id",
+]

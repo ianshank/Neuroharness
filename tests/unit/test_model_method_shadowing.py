@@ -35,6 +35,11 @@ import neuroharness
 #: because the subclass genuinely overrides pydantic's behaviour rather than
 #: repurposing the name. An addition here is a decision: it says "this really is
 #: the pydantic hook, implemented deliberately".
+#: Two spellings are accepted: a bare name is allowed on any model, and
+#: ``Class.name`` only on that class. The scoped form exists because the cost of
+#: the bare one is invisible - every name added here stops being checked
+#: everywhere, so one model's justified override quietly licenses the next
+#: model's repurposing of the same name, which is the defect this file is about.
 DELIBERATE_OVERRIDES: Final[frozenset[str]] = frozenset(
     {
         # The documented post-construction hook. ``ActionClassRegistry`` uses it
@@ -42,6 +47,14 @@ DELIBERATE_OVERRIDES: Final[frozenset[str]] = frozenset(
         # hook is for. Overriding it means implementing pydantic's contract, not
         # borrowing its name for something else.
         "model_post_init",
+        # ``AgentResponse`` re-validates a copy. Same signature, same meaning,
+        # one added guarantee: ``BaseModel.model_copy(update=...)`` writes values
+        # into the copy without running a single validator, which on the
+        # agent-facing response is the entire ``SEC-07`` contract bypassed by the
+        # one call a caller makes to attach a result to an existing response.
+        # Scoped, because a model that overrode ``model_copy`` to mean something
+        # else is exactly what the rest of this file is for catching.
+        "AgentResponse.model_copy",
     }
 )
 
@@ -98,13 +111,8 @@ def test_the_package_defines_models_at_all() -> None:
     assert len(_model_classes()) > 10
 
 
-@pytest.mark.parametrize(
-    "model",
-    _model_classes(),
-    ids=lambda model: f"{model.__module__.rsplit('.', 1)[-1]}.{model.__qualname__}",
-)
-def test_no_model_shadows_a_base_model_attribute(model: type[BaseModel]) -> None:
-    """A name that means one thing to pydantic and another here is a trap.
+def _collisions(model: type[BaseModel]) -> set[str]:
+    """Names this class body defines that ``BaseModel`` also defines, unlicensed.
 
     ``vars(model)`` is deliberate: it reads only what *this* class body defines,
     so an attribute inherited from another model in the package is not reported
@@ -115,13 +123,49 @@ def test_no_model_shadows_a_base_model_attribute(model: type[BaseModel]) -> None
         for name in vars(model)
         if not name.startswith(_DUNDER_PREFIX) and name not in _SYNTHESIZED
     }
-    collisions = (declared & _BASE_MODEL_NAMES) - DELIBERATE_OVERRIDES
+    return {
+        name
+        for name in declared & _BASE_MODEL_NAMES
+        if name not in DELIBERATE_OVERRIDES
+        and f"{model.__name__}.{name}" not in DELIBERATE_OVERRIDES
+    }
+
+
+@pytest.mark.parametrize(
+    "model",
+    _model_classes(),
+    ids=lambda model: f"{model.__module__.rsplit('.', 1)[-1]}.{model.__qualname__}",
+)
+def test_no_model_shadows_a_base_model_attribute(model: type[BaseModel]) -> None:
+    """A name that means one thing to pydantic and another here is a trap."""
+    collisions = _collisions(model)
     assert not collisions, (
         f"{model.__module__}.{model.__qualname__} defines {sorted(collisions)}, "
-        f"which pydantic's BaseModel also defines. Rename, or add the name to "
-        f"DELIBERATE_OVERRIDES with a comment saying why this really is the "
-        f"pydantic hook."
+        f"which pydantic's BaseModel also defines. Rename, or add "
+        f"{model.__name__}.<name> to DELIBERATE_OVERRIDES with a comment "
+        f"saying why this really is the pydantic method."
     )
+
+
+def test_a_scoped_override_licenses_only_the_class_it_names() -> None:
+    """The control for the scoped entries: they must not license the name at large.
+
+    An allowlist that quietly widened would be worse than no allowlist, because
+    the file would still report green while the rule it enforces had become
+    "anybody may redefine ``model_copy``". The two classes below define the same
+    method; only the one the entry names is allowed to.
+    """
+
+    class AgentResponse(BaseModel):
+        def model_copy(self, *, update: object = None, deep: bool = False) -> BaseModel:
+            return self
+
+    class Other(BaseModel):
+        def model_copy(self, *, update: object = None, deep: bool = False) -> BaseModel:
+            return self
+
+    assert not _collisions(AgentResponse)
+    assert _collisions(Other) == {"model_copy"}
 
 
 def test_the_check_would_have_caught_the_defect_it_was_written_for() -> None:

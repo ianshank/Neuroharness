@@ -58,8 +58,11 @@ _DETERMINISM_RUNS: Final[int] = 50
 #: Identifiers are drawn from a small pool so that repeated ids - and therefore
 #: repeated reason codes - actually occur.
 _CRITIC_IDS: Final[tuple[str, ...]] = ("critic.a", "critic.b", "critic.c")
-_FACT_NAMES: Final[tuple[str, ...]] = ("fact.a", "fact.b")
-_RULE_ID: Final[str] = "rule.a"
+#: Real fact names from the reference registry. These were "fact.a"/"fact.b",
+#: which carry a dot; the record catalogue takes snake_case here, so a
+#: generated abstention naming one of them could not have been recorded.
+_FACT_NAMES: Final[tuple[str, ...]] = ("ci_result", "deploy_state")
+_RULE_ID: Final[str] = "WF-01"
 
 
 def _reason(name: ReasonName, subject: str = "subject.a") -> ReasonCode:
@@ -74,7 +77,7 @@ critic_outcomes = st.builds(
     effective_mode=st.sampled_from((Mode.SHADOW, Mode.ADVISORY, Mode.ENFORCE)),
     repairable=st.sampled_from((True, False, None)),
     reason=st.one_of(
-        st.none(), st.just(ReasonCode(ReasonName.MONITOR_VIOLATION, "prop.window"))
+        st.none(), st.just(ReasonCode(ReasonName.MONITOR_VIOLATION, "WF-06b"))
     ),
 )
 

@@ -17,14 +17,20 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 
 from neuroharness import defaults
-from neuroharness.models.common import Digest
+from neuroharness.config import SigningAlgorithm
+from neuroharness.errors import EvidenceUnavailableError
+from neuroharness.models.common import Digest, Mode, Verdict
+from neuroharness.tokens.model import DecisionToken
 from neuroharness.tokens.nonce import (
     ConsumeOutcome,
     InMemoryIssuanceLedger,
     InMemoryNonceStore,
     InMemoryRevocationList,
+    IssuanceEntry,
+    IssuanceEvidence,
     IssuanceLedger,
     NonceStore,
+    RecordingIssuanceLedger,
     RevocationList,
     RevocationScope,
 )
@@ -449,4 +455,283 @@ class TestIssuanceLedger:
         assert results.count(None) == 1
         holders = {r.token_id for r in results if r is not None}
         assert len(holders) == 1
+        assert ledger.issued_count == 1
+
+
+class FakeIssuanceEvidence:
+    """A stand-in for the durable ``token_issued`` record of one decision.
+
+    It is deliberately able to do the thing that makes this hard: ``lands``
+    decides whether a write that *reports* failure nevertheless made the record
+    durable. That is the case a compensating release cannot distinguish - a
+    store that timed out after committing - and it is the case the whole design
+    has to survive, so it is modelled here rather than assumed away.
+    """
+
+    def __init__(self, *, holding: IssuanceEntry | None = None) -> None:
+        self.holding = holding
+        self.writes = 0
+        self.reads = 0
+        #: When set, ``record_issuance`` raises it.
+        self.failure: Exception | None = None
+        #: Whether a failing write still made the record durable.
+        self.lands = False
+
+    def recorded_issuance(self) -> IssuanceEntry | None:
+        self.reads += 1
+        return self.holding
+
+    def record_issuance(self, token: DecisionToken) -> None:
+        self.writes += 1
+        entry = IssuanceEntry(
+            tenant_id=token.tenant_id,
+            decision_id=token.decision_id,
+            token_id=token.token_id,
+            envelope_digest=token.envelope_digest,
+            issued_at=token.issued_at,
+        )
+        if self.failure is None:
+            self.holding = entry
+            return
+        if self.lands:
+            self.holding = entry
+        raise self.failure
+
+
+def decision_token(
+    *,
+    token_id: str = TOKEN_ID,
+    tenant_id: str = TENANT,
+    decision_id: str = DECISION,
+    envelope_digest: Digest = ENVELOPE,
+    at: datetime = START,
+) -> DecisionToken:
+    """A syntactically complete token, since the ledger keys off its fields."""
+    return DecisionToken(
+        token_id=token_id,
+        decision_id=decision_id,
+        envelope_digest=envelope_digest,
+        proposal_digest=digest("proposal"),
+        policy_bundle_digest=digest("bundle"),
+        record_hash=digest("record"),
+        tenant_id=tenant_id,
+        mode=Mode.ENFORCE,
+        verdict=Verdict.ALLOW,
+        issued_at=at,
+        expires_at=at + timedelta(seconds=defaults.DEFAULT_TOKEN_TTL_SECONDS),
+        key_id="key-a",
+        key_alg=SigningAlgorithm.HMAC_SHA256,
+        shadow=False,
+    )
+
+
+class TestClaimingByRecording:
+    """``D-5``, option (c): the issuance record *is* the claim (``FR-23``).
+
+    The defect these tests exist for: the ledger claimed, the caller then wrote
+    the ``token_issued`` record, and an evidence outage between the two left a
+    claim standing for a token nobody holds - permanently, because the ledger
+    never purges, and unrecoverably, because the refusal was reported as an
+    infrastructure reason that cannot escalate.
+
+    The repair does not release the claim; it never takes one until the record
+    is durable. So the two properties below have to hold *together*, and either
+    one alone is easy: a decision whose record failed must be mintable again,
+    and a decision whose record landed must not be mintable again - including
+    when the write that landed it reported failure.
+    """
+
+    def test_satisfies_the_recording_protocol(self) -> None:
+        ledger = InMemoryIssuanceLedger()
+        assert isinstance(ledger, RecordingIssuanceLedger)
+        assert isinstance(ledger, IssuanceLedger), "the narrower contract still holds"
+
+    def test_satisfies_the_evidence_protocol(self) -> None:
+        """The fake is held to the protocol, or it proves nothing about it."""
+        assert isinstance(FakeIssuanceEvidence(), IssuanceEvidence)
+
+    def test_a_claim_is_taken_only_once_the_record_is_durable(self) -> None:
+        evidence = FakeIssuanceEvidence()
+        ledger = InMemoryIssuanceLedger()
+
+        assert (
+            ledger.claim_recorded(token=decision_token(), evidence=evidence, now=START)
+            is None
+        )
+
+        assert evidence.writes == 1
+        entry = ledger.entry_for(tenant_id=TENANT, decision_id=DECISION)
+        assert entry is not None
+        assert entry.token_id == TOKEN_ID
+
+    def test_a_record_that_failed_leaves_no_claim_behind(self) -> None:
+        """The wedge, at its source: nothing is held, so nothing is stuck."""
+        evidence = FakeIssuanceEvidence()
+        evidence.failure = EvidenceUnavailableError("the store is down")
+        ledger = InMemoryIssuanceLedger()
+
+        with pytest.raises(EvidenceUnavailableError):
+            ledger.claim_recorded(token=decision_token(), evidence=evidence, now=START)
+
+        assert ledger.entry_for(tenant_id=TENANT, decision_id=DECISION) is None
+        assert ledger.issued_count == 0
+
+    def test_the_decision_is_mintable_again_once_the_store_recovers(self) -> None:
+        """The retry that had no test, at the ledger's own level."""
+        evidence = FakeIssuanceEvidence()
+        evidence.failure = EvidenceUnavailableError("the store is down")
+        ledger = InMemoryIssuanceLedger()
+
+        with pytest.raises(EvidenceUnavailableError):
+            ledger.claim_recorded(token=decision_token(), evidence=evidence, now=START)
+
+        evidence.failure = None
+        later = START + timedelta(seconds=defaults.DEFAULT_TOKEN_TTL_SECONDS)
+        retry = ledger.claim_recorded(
+            token=decision_token(token_id=OTHER_TOKEN_ID, at=later),
+            evidence=evidence,
+            now=later,
+        )
+
+        assert retry is None, "a decision whose record never landed was not authorised"
+        entry = ledger.entry_for(tenant_id=TENANT, decision_id=DECISION)
+        assert entry is not None
+        assert entry.token_id == OTHER_TOKEN_ID
+
+    @pytest.mark.mutation
+    def test_a_record_that_landed_while_reporting_failure_refuses_the_retry(self) -> None:
+        """The case a compensating release cannot handle, and this one can.
+
+        The store commits and then the call times out, so the caller is told the
+        write failed while the record is durable. Releasing a claim on failure
+        would mint a second token here - a fresh token with a fresh lifetime,
+        which is exactly what the never-purge rule exists to prevent. Reading
+        the record instead of a ledger's memory is what makes the difference.
+        """
+        evidence = FakeIssuanceEvidence()
+        evidence.failure = EvidenceUnavailableError("committed, then timed out")
+        evidence.lands = True
+        ledger = InMemoryIssuanceLedger()
+
+        with pytest.raises(EvidenceUnavailableError):
+            ledger.claim_recorded(token=decision_token(), evidence=evidence, now=START)
+        assert ledger.entry_for(tenant_id=TENANT, decision_id=DECISION) is None
+
+        evidence.failure = None
+        holder = ledger.claim_recorded(
+            token=decision_token(token_id=OTHER_TOKEN_ID), evidence=evidence, now=START
+        )
+
+        assert holder is not None, "the chain already authorises this decision"
+        assert holder.token_id == TOKEN_ID
+        assert evidence.writes == 1, "the second mint never reached the store"
+
+    @pytest.mark.mutation
+    def test_an_issuance_this_process_never_saw_is_still_refused(self) -> None:
+        """A restart empties the ledger; it does not empty the chain.
+
+        This is why :meth:`IssuanceEvidence.recorded_issuance` may not answer
+        from a cache. A ledger that trusted its own memory would mint a second
+        token for every decision that was authorised before the process
+        restarted, and for every decision another gateway authorised.
+        """
+        recorded = IssuanceEntry(
+            tenant_id=TENANT,
+            decision_id=DECISION,
+            token_id=TOKEN_ID,
+            envelope_digest=ENVELOPE,
+            issued_at=START,
+        )
+        evidence = FakeIssuanceEvidence(holding=recorded)
+        ledger = InMemoryIssuanceLedger()
+
+        holder = ledger.claim_recorded(
+            token=decision_token(token_id=OTHER_TOKEN_ID), evidence=evidence, now=START
+        )
+
+        assert holder is recorded
+        assert evidence.writes == 0
+
+    def test_a_recorded_issuance_is_never_forgotten(self) -> None:
+        """The never-purge property, on the recorded path.
+
+        A year is far past any token lifetime, so a retention-based purge would
+        have dropped the entry - and the second mint would be a fresh token with
+        a fresh lifetime. Nothing here expires.
+        """
+        evidence = FakeIssuanceEvidence()
+        ledger = InMemoryIssuanceLedger()
+        ledger.claim_recorded(token=decision_token(), evidence=evidence, now=START)
+
+        much_later = START + timedelta(days=DAYS_WELL_PAST_ANY_TOKEN_LIFETIME)
+        holder = ledger.claim_recorded(
+            token=decision_token(token_id=OTHER_TOKEN_ID, at=much_later),
+            evidence=evidence,
+            now=much_later,
+        )
+
+        assert holder is not None
+        assert holder.token_id == TOKEN_ID
+        assert evidence.writes == 1
+
+    def test_the_cached_claim_answers_without_touching_the_store(self) -> None:
+        """A duplicate refusal must not depend on the store being reachable.
+
+        Once this process has recorded the issuance it knows the answer, and an
+        evidence outage is not a reason to start minting second tokens.
+        """
+        evidence = FakeIssuanceEvidence()
+        ledger = InMemoryIssuanceLedger()
+        ledger.claim_recorded(token=decision_token(), evidence=evidence, now=START)
+        reads_after_first = evidence.reads
+
+        holder = ledger.claim_recorded(
+            token=decision_token(token_id=OTHER_TOKEN_ID), evidence=evidence, now=START
+        )
+
+        assert holder is not None
+        assert evidence.reads == reads_after_first
+
+    def test_a_different_decision_is_still_a_different_key(self) -> None:
+        """Fail-closed must not become fail-shut for unrelated decisions."""
+        ledger = InMemoryIssuanceLedger()
+        assert (
+            ledger.claim_recorded(
+                token=decision_token(), evidence=FakeIssuanceEvidence(), now=START
+            )
+            is None
+        )
+        assert (
+            ledger.claim_recorded(
+                token=decision_token(decision_id=OTHER_DECISION, token_id=OTHER_TOKEN_ID),
+                evidence=FakeIssuanceEvidence(),
+                now=START,
+            )
+            is None
+        )
+        assert ledger.issued_count == 2
+
+    @pytest.mark.mutation
+    def test_exactly_one_record_is_written_under_concurrent_claims(self) -> None:
+        """Atomic at mint time: the read of the chain and the write are one step.
+
+        Were they two, several threads would each read "no issuance" and each
+        write one, and the chain would carry two authorisations for a decision
+        that was evaluated once (``ADR-0008``).
+        """
+        evidence = FakeIssuanceEvidence()
+        ledger = InMemoryIssuanceLedger()
+
+        def attempt(index: int) -> object:
+            return ledger.claim_recorded(
+                token=decision_token(token_id=f"tok-{index:08d}"),
+                evidence=evidence,
+                now=START,
+            )
+
+        with ThreadPoolExecutor(max_workers=POOL_SIZE) as pool:
+            results = list(pool.map(attempt, range(CONCURRENT_WORKERS)))
+
+        assert results.count(None) == 1
+        assert evidence.writes == 1
         assert ledger.issued_count == 1

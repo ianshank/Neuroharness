@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Final
+from uuid import UUID
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -33,7 +34,13 @@ from neuroharness.errors import (
     FailClosedError,
     TokenVerdictMismatchError,
 )
-from neuroharness.evidence.chain import FIELD_KIND, RecordKind, plain_value
+from neuroharness.evidence.chain import (
+    FIELD_KIND,
+    FIELD_RECORD_ID,
+    FIELD_TENANT_ID,
+    RecordKind,
+    plain_value,
+)
 from neuroharness.evidence.store import AppendResult, EvidenceWriter, InMemoryEvidenceStore
 from neuroharness.evidence.wal import InMemoryWriteAheadLog
 from neuroharness.models.common import Digest, EffectClass, Mode, Verdict, VerifierResult
@@ -42,6 +49,7 @@ from neuroharness.pipeline import DecisionContext, DecisionPipeline
 from neuroharness.pipeline.decision import (
     PIPELINE_OWNED_EVALUATION_FIELDS,
     RecordNotConstructibleError,
+    issuance_record_id,
 )
 from neuroharness.reason import ReasonCode, ReasonName
 from neuroharness.resolve.inputs import CriticOutcome, ResolutionRequest, SimpleClassPolicy
@@ -497,6 +505,339 @@ def test_an_outage_between_the_two_records_withholds_the_token(
     assert outcome.record is not None, "the evaluation record still stands"
     assert outcome.verdict is Verdict.ALLOW, "the resolver's verdict is unchanged"
     assert [r[FIELD_KIND] for r in records(store)] == [RecordKind.EVALUATION.value]
+
+
+# --- FR-23/D-5: the issuance record is the issuance claim ---------------------
+
+
+class OutageOnTheIssuanceRecord(EvidenceWriter):
+    """The real writer, with the store down only for the ``token_issued`` record.
+
+    Unlike a writer that simply raises, this drives the whole gateway path:
+    ``store.append`` refuses, the write-ahead log stages the record, and
+    ``EvidenceWriter`` re-raises. That matters here, because what the log does
+    with a record for a token nobody received is half of the question.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.outage = True
+        super().__init__(*args, **kwargs)
+
+    def write(self, record: Any) -> AppendResult:
+        down = self.outage and record.get(FIELD_KIND) == RecordKind.TOKEN_ISSUED.value
+        if down:
+            self.store.set_available(False)
+        try:
+            return super().write(record)
+        finally:
+            if down:
+                self.store.set_available(True)
+
+
+class IssuanceRecordLandsThenReportsFailure(EvidenceWriter):
+    """The write commits and *then* the call fails.
+
+    This is the failure a compensating release cannot handle and the reason
+    ``tokens/nonce.py`` refuses one: the caller is told the record did not land
+    while it did, so "provably never returned" is not provable. Releasing a
+    claim here would mint a second token for a decision the chain already
+    authorises.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.outage = True
+        super().__init__(*args, **kwargs)
+
+    def write(self, record: Any) -> AppendResult:
+        result = super().write(record)
+        if self.outage and record.get(FIELD_KIND) == RecordKind.TOKEN_ISSUED.value:
+            raise EvidenceUnavailableError("committed, then the connection dropped")
+        return result
+
+
+def pipeline_with(writer: EvidenceWriter, tokens: TokenService) -> DecisionPipeline:
+    return DecisionPipeline(writer=writer, tokens=tokens)
+
+
+def test_the_issuance_record_is_identified_by_the_decision_it_authorises(
+    pipeline, store
+) -> None:
+    """The derivation is what makes the record a claim rather than a receipt.
+
+    Because the id is a function of ``(tenant_id, decision_id)``, the store's
+    own refusal of a duplicate id is the at-most-once conditional insert, and an
+    operator asking "was this decision ever authorised" has one record to look
+    up rather than a chain to scan.
+    """
+    pipeline.evaluate(allowing_request(), context())
+
+    issued = records(store)[1]
+    assert issued["record_id"] == issuance_record_id(
+        tenant_id=TENANT_ID, decision_id=DECISION_ID
+    )
+
+
+def test_the_issuance_record_id_is_a_stable_function_of_the_decision() -> None:
+    """The derivation is a contract, not an implementation detail.
+
+    Two processes, two releases and a replay all have to name the same record
+    for the same decision, or the record stops being an at-most-once claim and
+    becomes a receipt again. And it has to separate decisions and tenants, or
+    one decision's authorisation refuses another's.
+    """
+    derived = issuance_record_id(tenant_id=TENANT_ID, decision_id=DECISION_ID)
+
+    assert derived == issuance_record_id(tenant_id=TENANT_ID, decision_id=DECISION_ID)
+    assert str(UUID(derived)) == derived, "the record schema types record_id as a UUID"
+    assert derived != issuance_record_id(tenant_id=TENANT_ID, decision_id=ACTION_ID)
+    assert derived != issuance_record_id(tenant_id="t2", decision_id=DECISION_ID)
+
+
+def test_the_tenant_and_the_decision_cannot_be_re_cut_into_the_same_identity() -> None:
+    """Concatenation without a length is two identifiers with one rendering.
+
+    A collision would fail closed - one decision refused as a duplicate of an
+    unrelated one - rather than mint twice, so this is a denial nobody could
+    explain rather than an unsafe mint. It is still worth not having.
+    """
+    assert issuance_record_id(tenant_id="ab", decision_id="c") != issuance_record_id(
+        tenant_id="a", decision_id="bc"
+    )
+
+
+def test_a_decision_is_mintable_again_after_an_outage_on_its_issuance_record(
+    store, wal, tokens, clock, ids
+) -> None:
+    """The retry that did not exist (increment plan §3.4, `D-5`).
+
+    The store goes down between the evaluation record and the ``token_issued``
+    record. The token is withheld, which was always right. What was wrong is
+    what happened next: the claim stood, the ledger never purges, and that
+    ``decision_id`` was un-mintable forever - reported as ``HARNESS_UNHEALTHY``,
+    which is an infrastructure reason and therefore terminal and
+    non-escalatable, so no operator could clear it. One transient blink in a
+    one-call window used to poison a decision permanently.
+    """
+    writer = OutageOnTheIssuanceRecord(store, clock=clock, id_generator=ids, wal=wal)
+    pipeline = pipeline_with(writer, tokens)
+
+    outage = pipeline.evaluate(allowing_request(), context())
+    assert outage.token is None, "an issuance nobody could record authorises nothing"
+
+    writer.outage = False
+    recovered = pipeline.evaluate(allowing_request(), context())
+
+    assert recovered.token is not None, "the decision was wedged by a transient outage"
+    assert recovered.permits_execution
+    kinds = [r[FIELD_KIND] for r in records(store)]
+    assert kinds.count(RecordKind.TOKEN_ISSUED.value) == 1
+    assert store.verify(TENANT_ID)
+
+
+def test_the_record_of_an_unreturned_issuance_is_not_left_staged_for_replay(
+    store, wal, tokens, clock, ids
+) -> None:
+    """A token that was never handed out must not be replayed into the chain.
+
+    The write-ahead log stages whatever the store could not take. For this
+    record that would assert an authorisation that never existed - and, because
+    the record's identity is the decision's, the replay would then refuse every
+    retry of a decision nobody was ever allowed to execute. Withheld means
+    withheld, in the log as well as in the return value.
+    """
+    writer = OutageOnTheIssuanceRecord(store, clock=clock, id_generator=ids, wal=wal)
+    pipeline = pipeline_with(writer, tokens)
+
+    pipeline.evaluate(allowing_request(), context())
+
+    assert not wal.pending(), "the issuance of a token nobody holds stays out of the chain"
+    report = wal.replay(store)
+    assert not report.appended
+    assert [r[FIELD_KIND] for r in records(store)] == [RecordKind.EVALUATION.value]
+
+
+def test_the_evaluation_record_is_still_staged_when_the_store_is_down(
+    pipeline, store, wal
+) -> None:
+    """The narrowness of the previous test, asserted rather than assumed.
+
+    Only the issuance record is dropped, and only after its own write failed.
+    The evaluation record staged during an outage replays exactly as ``FR-23``
+    requires, because an unrecorded *refusal* is as much a hole in the audit
+    trail as an unrecorded allow.
+    """
+    store.set_available(False)
+
+    pipeline.evaluate(allowing_request(), context())
+
+    assert len(wal.pending()) == 1
+
+
+@pytest.mark.mutation
+def test_no_second_token_when_the_issuance_record_landed_despite_the_failure(
+    store, wal, tokens, clock, ids
+) -> None:
+    """The never-purge argument, restated as the test that must not regress.
+
+    ``tokens/nonce.py`` refuses to release a claim on failure because forgetting
+    an issuance is indistinguishable from never having minted, and a second mint
+    is a fresh token with a fresh lifetime. That argument is answered here
+    rather than argued around: the claim is never taken unless the record lands,
+    and whether it landed is read back from the chain - so the one case a
+    release could not have handled, a write that committed and then reported
+    failure, refuses the retry instead of minting again.
+    """
+    writer = IssuanceRecordLandsThenReportsFailure(
+        store, clock=clock, id_generator=ids, wal=wal
+    )
+    pipeline = pipeline_with(writer, tokens)
+
+    lost = pipeline.evaluate(allowing_request(), context())
+    assert lost.token is None, "a token whose issuance reported failure is not returned"
+
+    writer.outage = False
+    retry = pipeline.evaluate(allowing_request(), context())
+
+    assert retry.token is None, "the chain already authorises this decision"
+    assert retry.verdict is Verdict.ALLOW, "the resolver's verdict is still its own"
+    kinds = [r[FIELD_KIND] for r in records(store)]
+    assert kinds.count(RecordKind.TOKEN_ISSUED.value) == 1, "one evaluation, one issuance"
+
+
+@pytest.mark.mutation
+def test_a_second_evaluation_of_one_decision_authorises_nothing_more(
+    pipeline, store
+) -> None:
+    """``ADR-0008`` through the pipeline: one decision id, one authorisation."""
+    first = pipeline.evaluate(allowing_request(), context())
+    second = pipeline.evaluate(allowing_request(), context())
+
+    assert first.token is not None
+    assert second.token is None
+    kinds = [r[FIELD_KIND] for r in records(store)]
+    assert kinds.count(RecordKind.TOKEN_ISSUED.value) == 1
+    assert store.verify(TENANT_ID)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, "not a payload"],
+    ids=["empty", "not-a-mapping"],
+)
+def test_an_unreadable_issuance_record_refuses_rather_than_minting_again(
+    pipeline, store, payload: Any
+) -> None:
+    """An unreadable chain is not an empty chain.
+
+    The record for this decision exists, so this decision has been authorised.
+    Failing to parse it is a reason to refuse, never a reason to treat the
+    decision as fresh: the alternative is minting a second token because the
+    first one's evidence could not be read.
+    """
+    store.append(
+        {
+            FIELD_TENANT_ID: TENANT_ID,
+            FIELD_KIND: RecordKind.TOKEN_ISSUED.value,
+            FIELD_RECORD_ID: issuance_record_id(
+                tenant_id=TENANT_ID, decision_id=DECISION_ID
+            ),
+            "trace_id": TRACE_ID,
+            "decision_id": DECISION_ID,
+            "action_id": ACTION_ID,
+            "token_issued": payload,
+        }
+    )
+
+    outcome = pipeline.evaluate(allowing_request(), context())
+
+    assert outcome.token is None
+    assert not outcome.permits_execution
+    kinds = [r[FIELD_KIND] for r in records(store)]
+    assert kinds.count(RecordKind.TOKEN_ISSUED.value) == 1
+
+
+class StaleReadStore(InMemoryEvidenceStore):
+    """A store whose reads lag its writes: ``has_record`` never sees anything.
+
+    Not a hypothetical. A deployment that reads from a replica and writes to the
+    primary has exactly this shape for as long as replication lags, and the
+    lookup that proves a decision was never authorised is a read. What has to
+    hold then is that the *write* still refuses, because the record's identity
+    is the decision's - so the second mint is stopped by the store's own unique
+    id even when the check in front of it was answered with stale data.
+    """
+
+    def has_record(self, tenant_id: str, record_id: str) -> bool:
+        return False
+
+
+class LyingReadStore(InMemoryEvidenceStore):
+    """A store that claims every record and can produce none of them."""
+
+    def has_record(self, tenant_id: str, record_id: str) -> bool:
+        return True
+
+
+@pytest.mark.mutation
+def test_a_stale_read_does_not_authorise_a_second_mint(clock, ids, wal, tokens) -> None:
+    """Two checks, and the second one is the store's own.
+
+    The evaluation record still lands, because it carries a generated id and is
+    not the claim. The issuance record carries the decision's id, so the append
+    is refused - and the refusal says a second mint was attempted rather than
+    that some record happened to collide.
+    """
+    store = StaleReadStore(clock=clock, id_generator=ids)
+    writer = EvidenceWriter(store, clock=clock, id_generator=ids, wal=wal)
+    pipeline = pipeline_with(writer, tokens)
+
+    first = pipeline.evaluate(allowing_request(), context())
+    # A second gateway, with its own ledger, deciding the same decision id.
+    other_tokens = TokenService(
+        signer=HmacSigner(key_id="k1", secret=HMAC_SECRET),
+        nonce_store=InMemoryNonceStore(),
+        revocation_list=InMemoryRevocationList(),
+        clock=clock,
+        id_generator=ids,
+    )
+    second = pipeline_with(writer, other_tokens).evaluate(allowing_request(), context())
+
+    assert first.token is not None
+    assert second.token is None, "the store's own identity check is the backstop"
+    kinds = [r[FIELD_KIND] for r in records(store)]
+    assert kinds.count(RecordKind.TOKEN_ISSUED.value) == 1
+
+
+def test_a_record_the_store_reports_and_cannot_produce_refuses_the_mint(
+    clock, ids, wal, tokens
+) -> None:
+    """The third way the chain can be unreadable, answered like the other two."""
+    store = LyingReadStore(clock=clock, id_generator=ids)
+    writer = EvidenceWriter(store, clock=clock, id_generator=ids, wal=wal)
+
+    outcome = pipeline_with(writer, tokens).evaluate(allowing_request(), context())
+
+    assert outcome.token is None
+    assert [r[FIELD_KIND] for r in records(store)] == [RecordKind.EVALUATION.value]
+
+
+def test_a_writer_without_a_write_ahead_log_still_retries_after_an_outage(
+    store, tokens, clock, ids
+) -> None:
+    """Nothing to un-stage is not a special case, and must not be a crash.
+
+    The write-ahead log is optional (``EvidenceWriter`` takes ``wal=None``), so
+    the un-staging step has to tolerate its absence - and the decision has to
+    stay retryable either way, because retryability comes from the claim never
+    having been taken rather than from anything the log did.
+    """
+    writer = OutageOnTheIssuanceRecord(store, clock=clock, id_generator=ids, wal=None)
+    pipeline = pipeline_with(writer, tokens)
+
+    assert pipeline.evaluate(allowing_request(), context()).token is None
+
+    writer.outage = False
+    assert pipeline.evaluate(allowing_request(), context()).token is not None
 
 
 def test_a_decision_id_the_schema_rejects_stops_before_the_chain(pipeline, store) -> None:

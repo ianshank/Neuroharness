@@ -30,7 +30,7 @@ import pytest
 SRC = Path(__file__).resolve().parents[2] / "src" / "neuroharness"
 
 #: Packages whose code participates in producing a verdict, a token, or a record.
-DECISION_PATH_PACKAGES = ("resolve", "tokens", "evidence", "registry", "canonical")
+DECISION_PATH_PACKAGES = ("resolve", "tokens", "evidence", "registry", "canonical", "response")
 
 #: Modules exempt because naming values is precisely their job, or because they
 #: contain no decision logic.

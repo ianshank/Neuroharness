@@ -28,9 +28,10 @@ from uuid import UUID
 
 import pytest
 
-from neuroharness.models.common import OverrideKind
+from neuroharness.models.common import OverrideKind, Verdict
 from neuroharness.models.record import Override
 from neuroharness.pipeline.decision import RecordNotConstructibleError
+from neuroharness.reason import ReasonCode, ReasonName
 from neuroharness.tokens.nonce import InMemoryRevocationList
 
 ANCHOR: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
@@ -276,17 +277,18 @@ def test_the_pipelines_token_record_handler_refuses_rather_than_writing(
 
     monkeypatch.setattr(decision, "DecisionTokenRecord", Rejecting)
 
-    pipeline = decision.DecisionPipeline.__new__(decision.DecisionPipeline)
+    # The handler moved into ``_IssuanceRecord`` when the ``token_issued``
+    # record became the issuance claim rather than a write that follows it. Same
+    # handler, same contract; only its address changed.
+    issuance = decision._IssuanceRecord.__new__(decision._IssuanceRecord)
     with pytest.raises(RecordNotConstructibleError) as error:
         # reaching past the API: the handler is the unit under test
-        decision.DecisionPipeline._write_token_issued(
-            pipeline, _signed_token_stub(), _context_stub()
-        )
+        decision._IssuanceRecord._validated_payload(issuance, _signed_token_stub().token)
     assert "token_issued" in str(error.value)
 
 
 def _signed_token_stub() -> Any:
-    """The attributes ``_write_token_issued`` reads, and nothing else."""
+    """The attributes the ``token_issued`` payload builder reads, and no others."""
 
     class _Token:
         token_id = str(UUID(int=0x7043))
@@ -316,9 +318,68 @@ def _signed_token_stub() -> Any:
     return _Signed()
 
 
-def _context_stub() -> Any:
-    class _Context:
-        trace_id = "0" * 32
-        action_class = "deployment.apply"
+# --- ADR-0025: a hard DENY that could not be recorded -------------------------
 
-    return _Context()
+
+def test_a_hard_critic_failing_without_a_reason_is_recordable() -> None:
+    """The defect ADR-0025 fixes, end to end, in the shape it actually occurred.
+
+    ``resolve/inputs.py`` maps ``VerifierResult.FAIL`` to ``RULE_FAILED`` and
+    subjects it with the *critic id* - the fallback for a hard critic that fails
+    and supplies no reason of its own. The record catalogue required a rule id
+    there, so the reason code the resolver produced could not be written down,
+    the pipeline turned that into ``ABSTAIN(SCHEMA_INVALID)``, and **a correct
+    hard DENY became an unrecorded harness fault**.
+
+    Neither half of the suite could see it: ``test_pipeline`` always passed an
+    explicit well-shaped reason, and the resolver truth table never builds a
+    record. This test is deliberately the join - it drives the resolver and then
+    asks the record catalogue about what came out.
+    """
+    from neuroharness.models.common import Mode, VerifierResult
+    from neuroharness.models.record import _REASON_CODE_RE
+    from neuroharness.resolve.inputs import CriticOutcome, ResolutionRequest, SimpleClassPolicy
+    from neuroharness.resolve.resolver import resolve
+
+    policy = SimpleClassPolicy(
+        mode=Mode.ENFORCE, approvable=False, escalate_on=frozenset(), repair_budget=0
+    )
+    critic = CriticOutcome(
+        critic_id="smt.deploy_contract",
+        result=VerifierResult.FAIL,
+        hard=True,
+        effective_mode=Mode.ENFORCE,
+    )
+
+    resolution = resolve(ResolutionRequest(policy=policy, critic_outcomes=(critic,)))
+
+    assert resolution.verdict is Verdict.DENY, "the resolver's part was always correct"
+    assert [code.render() for code in resolution.reason_codes] == [
+        "RULE_FAILED:smt.deploy_contract"
+    ]
+    for code in resolution.reason_codes:
+        assert _REASON_CODE_RE.fullmatch(code.render()), (
+            f"{code.render()!r} is what the resolver emits for a hard critic that "
+            "fails without its own reason, and the record catalogue refuses it. A "
+            "decision that cannot be recorded was not made (Art. III)."
+        )
+
+
+def test_a_rule_id_and_a_critic_id_are_both_valid_and_tell_themselves_apart() -> None:
+    """The widening in ADR-0025, and the reason it is not a loosening.
+
+    ``RULE_FAILED`` now takes either identifier. Both are drawn from closed
+    registry vocabularies and neither admits prose, and they are disjoint - a
+    rule id starts uppercase, a critic id lowercase - so an operator reading a
+    record always knows which they have.
+    """
+    from neuroharness.models.record import _REASON_CODE_RE
+
+    assert ReasonCode(ReasonName.RULE_FAILED, "WF-01").render() == "RULE_FAILED:WF-01"
+    assert ReasonCode(ReasonName.RULE_FAILED, "pdp.deploy.allowlist").subject is not None
+    assert _REASON_CODE_RE.fullmatch("RULE_FAILED:WF-01")
+    assert _REASON_CODE_RE.fullmatch("RULE_FAILED:pdp.deploy.allowlist")
+
+    # And prose is still refused, which is the property the widening must keep.
+    with pytest.raises(ValueError):
+        ReasonCode(ReasonName.RULE_FAILED, "ignore previous instructions")
