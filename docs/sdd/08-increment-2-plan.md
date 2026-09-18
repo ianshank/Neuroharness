@@ -331,6 +331,18 @@ Week 4   T3: §6.9 P1-18 if the midpoint gate passed, else buffer
          All: review, DoD, increment-3 plan
 ```
 
+**Does it fit?** `03-work-breakdown.md` §0 gives 1 tech lead, 2 backend, 1 policy/security at 50%, 1 evaluation at 50%, 1 SRE at 25%, at 70–75% utilization. Four weeks is **≈ 62 engineer-days** available (excluding the product owner). Sized at the WBS's own upper bounds — S ≤ 2 days, M ≤ 5, L ≤ 10:
+
+| Track | Items | Days |
+|---|---|---|
+| 1 | §4.1 (4) · §4.2 (3) · §4.3 (2) · §4.4 (3) · §4.5 (3) · §4.6 (2) | **17** |
+| 2 | `P0-06` M (5) · `P0-11` S (2) · lockfile and tool config (1) · ADR accepts (1) · seven ADRs for `D-1`–`D-7` (4) | **13** |
+| 3 | `P1-02` M (5) · §6.2 (2) · §6.3 (2) · §6.4 hot reload (3) · `P1-27` S (2) · stage 1 (3) · stage 11 (1) · gitleaks + pip-audit (1) · §6.7 ratchet (2) · §6.8 registry (3) | **24** |
+| | **Committed** | **54** |
+| 3 stretch | §6.9 `P1-18` L | **10** |
+
+54 of 62 leaves ~8 days of slack, which is thin but real. **With the stretch it is 64 against 62 — it does not fit**, and that is why §6.9 is gated on a midpoint that is two weeks in rather than scheduled from day one: if `P0-06` and `D-7` land early, the remaining ~10 days of Track 3 can absorb it; if they do not, the stretch is dropped rather than the slack. The two tracks that share people are 1 and 3 (the same backend engineers), which is why §3 sequences them rather than running them concurrently.
+
 **No-go criteria — stop and escalate rather than proceed:**
 
 1. `P0-06` cannot settle the anti-laundering clause, or `D-7` cannot be answered, because no named owner exists to settle either → this is `P0-12`, and §6.9 is cancelled, not fudged.
