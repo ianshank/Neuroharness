@@ -37,6 +37,7 @@ from neuroharness.tokens.signer import (
     SignerFactory,
     SignerRegistry,
     default_signer_registry,
+    signer_for_settings,
     verify_signature,
 )
 
@@ -64,5 +65,6 @@ __all__ = [
     "SignerRegistry",
     "TokenService",
     "default_signer_registry",
+    "signer_for_settings",
     "verify_signature",
 ]

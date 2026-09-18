@@ -54,7 +54,18 @@ class Settings(BaseModel):
 
     tenant_id: str = Field(default="default", min_length=1, max_length=64)
     unregistered_class_policy: UnregisteredClassPolicy = UnregisteredClassPolicy.STRICT
-    signing_algorithm: SigningAlgorithm = SigningAlgorithm.HMAC_SHA256
+
+    #: ``ADR-0019`` decision 1: ECDSA P-256 by default, Ed25519 where the key
+    #: service supports it, HMAC-SHA256 *only* for single-process deployments.
+    #: The default is the deployment shape the harness is designed for, in which
+    #: the token service and the broker are separate processes. Defaulting to
+    #: HMAC there would hand the broker the key that mints the tokens it is
+    #: supposed to only verify, which dissolves the separation the token exists
+    #: to create -- and it would do so silently, on a deployment nobody
+    #: configured wrongly. A build with no P-256 signer registered refuses to
+    #: start (:func:`neuroharness.tokens.signer.signer_for_settings`); it does
+    #: not fall back.
+    signing_algorithm: SigningAlgorithm = SigningAlgorithm.ECDSA_P256
 
     token_ttl_seconds: int = Field(default=defaults.DEFAULT_TOKEN_TTL_SECONDS, ge=1, le=3600)
     bundle_grace_seconds: int = Field(default=defaults.DEFAULT_BUNDLE_GRACE_SECONDS, ge=0, le=3600)
@@ -85,13 +96,38 @@ class Settings(BaseModel):
         a startup failure, never a silent fallback: a harness running with
         settings the operator did not intend is a harness nobody can reason
         about.
+
+        So is a *misspelled* name. Reading only the known fields would let
+        ``NEUROHARNESS_REPAIR_BUDGT=1`` sit in a deployment manifest, pass review
+        and do nothing, while the default quietly stayed in force -- an operator
+        would believe a control is configured that is not, which is the one
+        belief a fail-closed harness cannot afford. ``extra="forbid"`` on the
+        model cannot catch it, because a name nobody recognises never reaches
+        the model at all. So the whole ``prefix`` namespace belongs to settings:
+        every variable in it must name a field this build reads, and any other
+        is a startup failure naming both the offending variable and the settings
+        that do exist.
+
+        There are no reserved names inside the namespace today. A prefixed
+        variable that is deliberately *not* a setting would have to be declared
+        here, which is the point: the exemption would be reviewable instead of
+        being an environment nobody audited.
         """
         env = os.environ if environ is None else environ
-        raw: dict[str, Any] = {}
-        for name in cls.model_fields:
-            key = f"{prefix}{name.upper()}"
-            if key in env:
-                raw[name] = _coerce(cls, name, env[key], key)
+        known = {f"{prefix}{name.upper()}": name for name in cls.model_fields}
+
+        unknown = sorted(key for key in env if key.startswith(prefix) and key not in known)
+        if unknown:
+            raise ConfigurationError(
+                f"unknown setting(s) in the {prefix} namespace: {', '.join(unknown)}; "
+                f"this build reads: {', '.join(sorted(known))}"
+            )
+
+        raw: dict[str, Any] = {
+            name: _coerce(cls, name, env[key], key)
+            for key, name in known.items()
+            if key in env
+        }
         try:
             return cls(**raw)
         except ValidationError as exc:

@@ -157,8 +157,15 @@ class Mode(str, Enum):
 
     @property
     def rank(self) -> int:
-        """How enforcing this mode is. Used to reject a critic mode looser than
-        its class allows, and stricter than its class permits."""
+        """How enforcing this mode is, as a total order.
+
+        Reporting and rollout tooling only. It is deliberately *not* a
+        constraint between a class and its critics: section 5.3 step 0 demotes a
+        hard critic on the critic's own declared mode, so an ``enforce`` critic
+        inside a ``shadow`` class is the shadow rollout working as designed
+        (``INV-11``, scenario ``A-16``). Enforcement is capped at the broker by
+        the class mode, not by comparing ranks.
+        """
         return {Mode.SHADOW: 0, Mode.ADVISORY: 1, Mode.ENFORCE: 2, Mode.HALTED: 3}[self]
 
 

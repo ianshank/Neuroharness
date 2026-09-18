@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from neuroharness.config import SigningAlgorithm
+from neuroharness.config import Settings, SigningAlgorithm
 from neuroharness.errors import ConfigurationError, TokenSignatureError
 from neuroharness.tokens.signer import (
     MIN_HMAC_SECRET_BYTES,
@@ -22,6 +22,7 @@ from neuroharness.tokens.signer import (
     Signer,
     SignerRegistry,
     default_signer_registry,
+    signer_for_settings,
     verify_signature,
 )
 
@@ -163,6 +164,76 @@ class TestSignerRegistry:
             SigningAlgorithm.HMAC_SHA256, HmacSigner.from_material, replace=True
         )
         assert registry.supports(SigningAlgorithm.HMAC_SHA256)
+
+
+class TestSignerForSettings:
+    """The seam between ``ADR-0019`` as a setting and ``ADR-0019`` as a signer."""
+
+    def test_a_default_deployment_refuses_to_start_without_its_signer(self) -> None:
+        """Falling back here would be the shared-secret deployment the ADR rejects.
+
+        A build that implements only HMAC and is asked for P-256 has nothing it
+        may safely substitute: handing back the HMAC signer would put the
+        minting key in the broker, on a deployment that changed no setting and
+        would therefore never be reviewed for it. The failure has to happen at
+        startup, where an operator is watching, rather than becoming a token
+        property nobody inspects.
+        """
+        with pytest.raises(ConfigurationError) as exc:
+            signer_for_settings(Settings.from_env({}), KeyMaterial(key_id="kms-1"))
+
+        # Both halves of the remedy: what was asked for, and what exists.
+        assert SigningAlgorithm.ECDSA_P256.value in str(exc.value)
+        assert SigningAlgorithm.HMAC_SHA256.value in str(exc.value)
+
+    def test_a_single_process_deployment_opts_into_hmac_explicitly(self) -> None:
+        """HMAC stays reachable, but only as a recorded choice.
+
+        ``ADR-0019`` permits it where the token service and the broker are one
+        process. The difference that matters is that someone wrote it down.
+        """
+        settings = Settings.from_env(
+            {"NEUROHARNESS_SIGNING_ALGORITHM": SigningAlgorithm.HMAC_SHA256.value}
+        )
+        signer = signer_for_settings(
+            settings, KeyMaterial(key_id="key-a", secret=SECRET_A)
+        )
+
+        assert signer.algorithm is SigningAlgorithm.HMAC_SHA256
+        assert signer.verify(PAYLOAD, signer.sign(PAYLOAD))
+
+    def test_a_deployment_that_registered_its_signer_starts(self) -> None:
+        """The refusal must be about the missing factory, not about the default."""
+        registry = default_signer_registry()
+        registry.register(SigningAlgorithm.ECDSA_P256, lambda m: _FakeP256Signer(m.key_id))
+
+        signer = signer_for_settings(
+            Settings.from_env({}), KeyMaterial(key_id="kms-1"), registry=registry
+        )
+
+        assert signer.algorithm is SigningAlgorithm.ECDSA_P256
+        assert signer.key_id == "kms-1"
+
+
+class _FakeP256Signer:
+    """Stands in for the KMS-backed P-256 signer a deployment supplies."""
+
+    def __init__(self, key_id: str) -> None:
+        self._key_id = key_id
+
+    @property
+    def algorithm(self) -> SigningAlgorithm:
+        return SigningAlgorithm.ECDSA_P256
+
+    @property
+    def key_id(self) -> str:
+        return self._key_id
+
+    def sign(self, payload: bytes) -> str:
+        return f"ecdsa:{len(payload)}"
+
+    def verify(self, payload: bytes, signature: str) -> bool:
+        return signature == self.sign(payload)
 
 
 class TestMultiKeySigner:

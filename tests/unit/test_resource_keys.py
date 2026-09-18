@@ -7,6 +7,8 @@ reason catalogue (section 5.6). These tests hold both properties.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from neuroharness.errors import RegistryValidationError
@@ -136,6 +138,101 @@ def test_is_known_checks_membership_for_enumerated_kinds(registry: ResourceKeyRe
 def test_malformed_enumerations_are_rejected(enumerations: dict, match: str) -> None:
     with pytest.raises(Exception, match=match):
         ResourceKeyRegistry(enumerations=enumerations)
+
+
+# --- the catalogue is read-only once signed (FR-34, SEC-05) ------------------
+
+
+def test_a_signed_enumeration_cannot_be_widened_in_place(
+    registry: ResourceKeyRegistry,
+) -> None:
+    """Widening an enumeration from inside the process is an unrecorded policy change.
+
+    ``frozen=True`` stops attribute assignment and nothing else, so a plain
+    dictionary here would let any code in the harness add a second spelling of
+    an approved target - ``Production`` beside ``production`` - to a catalogue
+    an operator signed. The registry digest would not move, the change would
+    appear in no record, and the next call keyed on the new spelling would pass
+    a gate nobody reviewed. That is the target-aliasing defect (``A-35``),
+    reached from inside the runtime rather than from the document.
+    """
+    aliased = "service:checkout/target:Production"
+    assert not registry.is_known(aliased)
+
+    with pytest.raises(TypeError):
+        registry.enumerations["target"] = ("staging", "production", "Production")
+
+    assert not registry.is_known(aliased)
+    assert registry.enumeration("target") == ENUMERATIONS["target"]
+
+
+def test_an_enumerated_kind_cannot_be_added_or_removed_after_loading(
+    registry: ResourceKeyRegistry,
+) -> None:
+    """Deleting a kind is the same attack from the other side.
+
+    ``is_known`` only constrains kinds the registry declares, so dropping
+    ``target`` from the catalogue turns every target identifier into "not this
+    registry's business" and silently removes the constraint instead of
+    widening it.
+    """
+    with pytest.raises(TypeError):
+        del registry.enumerations["target"]
+    with pytest.raises(TypeError):
+        registry.enumerations["queue"] = ("orders",)
+
+    assert registry.has_kind("target")
+    assert not registry.has_kind("queue")
+    assert not registry.is_known("service:checkout/target:Production")
+
+
+def test_the_mapping_the_caller_passed_in_is_no_longer_connected() -> None:
+    """A loader that keeps its parsed document must not keep a handle on policy.
+
+    The registry is built from a document the loader parsed and still holds. If
+    the model stored that mapping by reference, editing the parsed document
+    later - a hot reload assembling the next version in place - would retune the
+    live registry underneath in-flight decisions.
+    """
+    source = {"target": ["staging", "production"]}
+    built = ResourceKeyRegistry(enumerations=source)
+
+    source["target"].append("Production")
+    source["queue"] = ["orders"]
+
+    assert built.enumeration("target") == ("staging", "production")
+    assert not built.has_kind("queue")
+    assert not built.is_known("service:checkout/target:Production")
+
+
+def test_the_empty_default_is_frozen_too() -> None:
+    """``ActionClassRegistry`` falls back to one shared ``ResourceKeyRegistry()``.
+
+    A mutable default would be a single dictionary sitting behind every registry
+    in the process, so one tenant could populate another tenant's enumerations -
+    or, worse, populate a catalogue that is meant to constrain nothing and start
+    denying calls that were fine a moment ago.
+    """
+    empty = ResourceKeyRegistry()
+    with pytest.raises(TypeError):
+        empty.enumerations["target"] = ("production",)
+    assert empty.enumerations == {}
+
+
+def test_enumerations_still_serialise_as_plain_json(
+    registry: ResourceKeyRegistry,
+) -> None:
+    """Freezing must not leak into the wire form.
+
+    The catalogue is canonicalised and digested, and it is exported for audit. A
+    ``mappingproxy`` or a tuple reaching the JSON encoder is a signing failure or
+    an export failure, discovered at the auditor rather than at the writer.
+    """
+    dumped = registry.model_dump(mode="json")["enumerations"]
+
+    assert isinstance(dumped, dict)
+    assert all(isinstance(members, list) for members in dumped.values())
+    assert json.loads(json.dumps(dumped)) == {k: list(v) for k, v in ENUMERATIONS.items()}
 
 
 # --- rendering (FR-25) -------------------------------------------------------

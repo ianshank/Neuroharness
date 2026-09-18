@@ -393,8 +393,8 @@ def deploy_entry(document: dict[str, Any]) -> dict[str, Any]:
                 {"id": "fsa.halt", "kind": "monitor", "hard": True, "mode": "halted",
                  "source_requirement": "WF-06a"}
             ),
-            "more enforcing than the class mode",
-            id="rule-c-critic-more-enforcing-than-class",
+            "class-level incident lever",
+            id="rule-c-critic-declares-the-halted-lever",
         ),
         pytest.param(
             lambda e: e.__setitem__("repair_budget", defaults.MAX_REPAIR_BUDGET + 1),
@@ -456,6 +456,26 @@ def test_loader_rejects_an_invalid_entry_naming_the_class_and_rule(
     assert exc.value.reason_code.name is ReasonName.REGISTRY_INTEGRITY_FAILED
 
 
+def test_loader_accepts_a_shadow_class_that_still_has_enforcing_critics(
+    document: dict[str, Any],
+) -> None:
+    """A rollout must be able to sign the registry scenario ``A-16`` describes.
+
+    Demoting the reference class to ``shadow`` is the first step of any
+    progressive rollout (``ADR-0010``). If the signed document then fails to
+    load, the operator's only way to start the rollout is to weaken the critics
+    themselves -- and a week of shadow evidence gathered with the gates turned
+    down says nothing about what enforcement would have blocked.
+    """
+    entry = deploy_entry(document)
+    entry["mode"] = Mode.SHADOW.value
+
+    loaded = load_registry(resign(document)).get(*DEPLOY)
+
+    assert loaded.mode is Mode.SHADOW
+    assert any(c.mode is Mode.ENFORCE and c.hard for c in loaded.critics)
+
+
 def test_loader_rejects_a_duplicate_tool_intent_pair(document: dict[str, Any]) -> None:
     """Rule (i): ``(tool, intent)`` is the identity of a class (``FR-30``)."""
     document["action_classes"].append(copy.deepcopy(document["action_classes"][0]))
@@ -478,7 +498,7 @@ def test_loader_accepts_the_good_case_for_every_rule(document: dict[str, Any]) -
              ReasonName.FACT_MISSING, ReasonName.FACT_STALE}
         )
         assert entry.approvable or not entry.escalate_on
-        assert all(c.mode.rank <= entry.mode.rank for c in entry.critics)
+        assert all(c.mode is not Mode.HALTED for c in entry.critics)
         assert 0 <= entry.repair_budget <= defaults.MAX_REPAIR_BUDGET
         assert all(c.source_requirement.strip() for c in entry.critics)
         assert not (entry.effect_class.takes_fast_path and entry.approvable)

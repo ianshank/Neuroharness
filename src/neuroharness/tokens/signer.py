@@ -25,7 +25,7 @@ import hmac
 from dataclasses import dataclass, field
 from typing import Callable, Final, Iterable, Mapping, Protocol, runtime_checkable
 
-from neuroharness.config import SigningAlgorithm
+from neuroharness.config import Settings, SigningAlgorithm
 from neuroharness.errors import ConfigurationError, TokenSignatureError
 
 __all__ = [
@@ -37,6 +37,7 @@ __all__ = [
     "MultiKeySigner",
     "SignerRegistry",
     "default_signer_registry",
+    "signer_for_settings",
     "verify_signature",
     "MIN_HMAC_SECRET_BYTES",
 ]
@@ -315,6 +316,34 @@ def default_signer_registry() -> SignerRegistry:
     registry is a place where one tenant's configuration can change another's.
     """
     return SignerRegistry({SigningAlgorithm.HMAC_SHA256: HmacSigner.from_material})
+
+
+def signer_for_settings(
+    settings: Settings,
+    material: KeyMaterial,
+    *,
+    registry: SignerRegistry | None = None,
+) -> Signer:
+    """Build the signer the deployment's settings ask for, or refuse to start.
+
+    This is the seam between ``ADR-0019`` as a *setting* and ``ADR-0019`` as a
+    *signer*, and it exists so that the two cannot disagree quietly. The ADR
+    makes ECDSA P-256 the default and HMAC-SHA256 acceptable only where the
+    token service and the broker are one process; a build that has not
+    registered a P-256 factory therefore has nothing it may legitimately
+    substitute. Falling back to the algorithm it does happen to have would put
+    the minting key inside the component whose whole job is to be unable to
+    mint, and it would do it on a deployment running defaults, with no operator
+    decision to point at afterwards.
+
+    So the refusal is a startup failure rather than a runtime verdict:
+    :meth:`SignerRegistry.create` raises :class:`ConfigurationError` naming the
+    configured algorithm and the ones this build implements. A single-process
+    deployment answers it by setting ``NEUROHARNESS_SIGNING_ALGORITHM`` to
+    ``hmac-sha256`` -- a recorded, reviewable choice, which is the difference
+    that matters.
+    """
+    return (registry or default_signer_registry()).create(settings.signing_algorithm, material)
 
 
 def verify_signature(

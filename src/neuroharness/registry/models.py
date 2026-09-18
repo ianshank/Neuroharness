@@ -290,22 +290,41 @@ class ActionClass(BaseModel):
 
     @model_validator(mode="after")
     def _check_critic_modes(self) -> "ActionClass":
-        """Rule (c): no critic may be more enforcing than its class.
+        """Rule (c): ``halted`` is a class-level lever, never a critic's mode.
 
-        Technical plan section 4.4: a per-critic mode may only be *less*
-        enforcing than the class mode -- a monitor may be advisory inside an
-        enforce class, never the reverse. The class mode is the operator's
-        single, auditable statement of how much this action is policed
-        (``FR-80``, ADR-0016); a critic that could exceed it would let a policy
-        author raise enforcement past what the rollout plan approved, bypassing
-        the demotion lever the operator relies on during a false-block spike.
+        The class mode is **not** a ceiling on critic modes. Section 5.3 step 0
+        demotes a hard critic on the critic's *own* declared mode, so an
+        ``enforce`` critic inside a ``shadow`` class is not a contradiction: it
+        is the configuration a shadow rollout exists to run. The critic blocks
+        in the verdict, the record carries the ``DENY`` the rollout is there to
+        measure, and the broker -- reading the *class* mode -- executes anyway
+        (``INV-11``, scenario ``A-16``, fixture ``MUT-16``). Refusing that
+        combination made the rollout unrepresentable and left shadow data
+        describing a program that always allowed.
+
+        Dropping the comparison gives nothing away. A critic cannot raise
+        enforcement past what the rollout approved, because enforcement is
+        decided at the broker on the class mode alone, downstream of every
+        critic; the demotion lever an operator reaches for during a false-block
+        spike is that class mode, and it still works with enforcing critics
+        underneath it (``FR-80``, ADR-0016).
+
+        What survives is ``halted``. It is the incident lever and it belongs to
+        a class: a halted class denies at step 0 before any critic is consulted
+        (``FR-49``). On a critic the word is not merely inert, it is inverted --
+        :attr:`CriticOutcome.counts_as_hard` demotes every mode that is not
+        ``enforce``, so a critic declared ``halted`` would quietly stop blocking.
+        The strongest word in the vocabulary would turn the gate off, and a
+        silent no-op in a signed policy document is how a control is believed to
+        be in force for a year before anyone checks (``FR-33``).
         """
         for critic in self.critics:
-            if critic.mode.rank > self.mode.rank:
+            if critic.mode is Mode.HALTED:
                 raise ValueError(
-                    f"critic {critic.id!r} has mode {critic.mode.value!r}, which is more "
-                    f"enforcing than the class mode {self.mode.value!r}; a critic may be "
-                    "advisory inside an enforce class, never the reverse (FR-33)"
+                    f"critic {critic.id!r} declares mode {Mode.HALTED.value!r}, which is a "
+                    "class-level incident lever rather than a critic rollout mode; such a "
+                    "critic would be demoted to soft and stop blocking entirely "
+                    "(FR-33, FR-49)"
                 )
         return self
 

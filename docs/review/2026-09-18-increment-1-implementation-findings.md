@@ -64,7 +64,8 @@ Recorded because the review paid for itself several times over. Full detail in t
 
 Seventeen findings, each reproduced with a throwaway script before it was
 believed. The five most serious are recorded here; the rest are in the commit
-history with their regression tests.
+history with their regression tests. `C-06` came later, from a review of the
+pull request that carried all of the above.
 
 ### C-01 Every decision record the pipeline wrote was invalid (Critical)
 The pipeline assembled the `evaluation` block as a free-form dictionary and
@@ -122,6 +123,63 @@ refuses for any other reason — a schema version ahead of this build — propag
 out and left every later staged record unreplayable, for good.
 **Resolution:** failures are reported per record with their reason code, and the
 log can be quarantined and drained.
+
+### C-06 The registry made the shadow rollout unrepresentable (High)
+**Found by:** a pull-request review that read the registry against the `F-01`
+amendment instead of against the technical plan.
+`ActionClass` rejected any critic whose mode was more enforcing than its class
+mode, citing technical plan §4.4. `F-01` had already established the opposite
+for resolution: §5.3 step 0 demotes a hard critic on the critic's **own**
+declared mode, because a class mode that propagated down made the verdict
+mode-dependent and left a shadow class unable to record the denial it exists to
+measure. The registry layer was never revisited, so the two halves of the same
+decision disagreed: the resolver was ready to resolve a `shadow` class with
+enforcing critics, and the registry refused to load one. That configuration is
+not an edge case — it is the whole of `A-16` and `MUT-16`, and the first step of
+any progressive rollout under `ADR-0010`. An operator wanting to start a shadow
+week had exactly one way through the loader, which was to demote the critics
+themselves, and a week of evidence gathered with the gates turned down says
+nothing about what enforcement would have blocked.
+The validator's argument for the rule was that a critic exceeding its class
+would let a policy author raise enforcement past what the rollout approved.
+That argument does not survive `INV-11`. Enforcement is decided at the broker,
+on the class mode alone, downstream of every critic; an `enforce` critic in a
+`shadow` class produces a recorded `DENY` that the broker ignores. The ceiling
+is structural, so the comparison bought nothing and cost the rollout.
+One constraint was left, and the old rule had it backwards. `halted` is the
+incident lever and it belongs to a class: a halted class denies at step 0 before
+any critic is consulted. On a *critic* the word is not inert but inverted,
+because `CriticOutcome.counts_as_hard` demotes every mode that is not `enforce`
+— so a critic declared `halted` quietly stops blocking, and the strongest word
+in the vocabulary turns the gate off. The rank comparison accepted exactly that
+(`halted` critic in a `halted` class, equal rank) while rejecting the shadow
+rollout.
+**Resolution:** the class mode no longer constrains its critics; `halted` is
+refused on a critic in every class mode. Specification v0.7 (`FR-80`) and
+technical plan §4.4 amended to match — §4.4 was the document that was wrong, and
+it is now the one that explains why the comparison is absent. `Mode.rank`
+survives as a reporting order with a docstring saying it is not a gate. Killing
+tests both ways: the `shadow`-class-with-`enforce`-critic entry must load,
+through the model and through the signed-document loader, and a `halted` critic
+must be refused under all four class modes.
+
+Also fixed in the same review: a signed resource-key registry's `enumerations`
+was a mutable `dict` inside a `frozen=True` model, so any code in the process
+could widen a canonical enumeration in place — adding `Production` beside
+`production` — without moving the registry digest and without leaving a record,
+which is `MUT-30`/`T-17` reached from inside the runtime; it now reuses the
+`freeze_document` machinery that closed the same shape on `Proposal.arguments`.
+`Settings.from_env` iterated the known fields, so a misspelled
+`NEUROHARNESS_*` variable was silently ignored and the default stayed in force,
+which for a fail-closed harness means a control the operator believes is
+configured is not; the whole prefix namespace now belongs to settings and an
+unknown member is a startup failure. And the default `signing_algorithm` was
+HMAC-SHA256, contradicting `ADR-0019` decision 1: a deployment on defaults chose
+a shared secret across the gateway/broker boundary, which lets the broker mint
+the tokens it exists to verify. The default is now ECDSA P-256, and because
+`HmacSigner` is the only signer this build implements, a startup path
+(`signer_for_settings`) refuses to start when the configured algorithm has no
+factory rather than falling back to the one that happens to be registered.
 
 Also fixed: the token-issuance record was written outside the pipeline's
 fail-closed boundary, so an evidence outage between the two records escaped

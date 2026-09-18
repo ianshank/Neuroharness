@@ -29,11 +29,12 @@ lease identity and the registry's declared template can never drift apart.
 from __future__ import annotations
 
 import re
-from typing import Any, Collection, Final, Mapping
+from typing import Annotated, Any, Collection, Final, Mapping
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from neuroharness.errors import RegistryValidationError
+from neuroharness.models.common import FrozenMappingSerializer, FrozenMappingValidator
 
 __all__ = [
     "RESOURCE_KEY_PATTERN",
@@ -197,7 +198,25 @@ class ResourceKeyRegistry(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    enumerations: dict[str, tuple[str, ...]] = {}
+    #: Read-only, and read-only all the way down. ``frozen=True`` stops
+    #: attribute *assignment* only, so a plain ``dict`` here would let any code
+    #: in the process widen a signed enumeration in place --
+    #: ``registry.enumerations["target"] += ("Production",)`` -- without
+    #: changing the registry digest and without leaving a record. That moves the
+    #: control in the permissive direction, which is the ``MUT-30``/``T-17``
+    #: target-aliasing defect reached from inside the runtime instead of from
+    #: the document. The freeze must be deep because pydantic copies the outer
+    #: mapping and passes its values through; it reuses the same machinery that
+    #: closed the hole on ``Proposal.arguments`` and
+    #: ``ActionClass.argument_schema``. ``validate_default`` is on so the empty
+    #: default is frozen too: the shared ``ResourceKeyRegistry()`` that
+    #: ``ActionClassRegistry`` falls back to would otherwise be one mutable
+    #: dictionary behind every registry in the process.
+    enumerations: Annotated[
+        Mapping[str, tuple[str, ...]],
+        FrozenMappingValidator,
+        FrozenMappingSerializer,
+    ] = Field(default_factory=dict, validate_default=True)
 
     @model_validator(mode="after")
     def _check_enumerations(self) -> "ResourceKeyRegistry":

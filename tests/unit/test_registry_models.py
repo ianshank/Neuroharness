@@ -177,23 +177,29 @@ def test_rule_b2_allows_solver_escalation_without_any_fact() -> None:
     assert ReasonName.SOLVER_TIMEOUT in entry.escalate_on
 
 
-# --- rule (c): critic mode never exceeds class mode (technical plan 4.4) ----
+# --- rule (c): halted is a class lever, not a critic mode (FR-49, INV-11) ---
+
+#: Every rollout mode a *critic* may declare. ``halted`` is absent on purpose:
+#: it is the class-level incident lever, and rule (c) refuses it on a critic.
+CRITIC_ROLLOUT_MODES = (Mode.SHADOW, Mode.ADVISORY, Mode.ENFORCE)
+
+#: Every rollout mode a *class* may declare.
+CLASS_ROLLOUT_MODES = (Mode.SHADOW, Mode.ADVISORY, Mode.ENFORCE, Mode.HALTED)
 
 
-@pytest.mark.parametrize(
-    ("class_mode", "critic_mode"),
-    [
-        (Mode.ENFORCE, Mode.ENFORCE),
-        (Mode.ENFORCE, Mode.ADVISORY),
-        (Mode.ENFORCE, Mode.SHADOW),
-        (Mode.ADVISORY, Mode.SHADOW),
-        (Mode.ADVISORY, Mode.ADVISORY),
-        (Mode.SHADOW, Mode.SHADOW),
-    ],
-)
-def test_rule_c_accepts_a_critic_no_more_enforcing_than_its_class(
+@pytest.mark.parametrize("class_mode", CLASS_ROLLOUT_MODES)
+@pytest.mark.parametrize("critic_mode", CRITIC_ROLLOUT_MODES)
+def test_rule_c_accepts_every_critic_mode_in_every_class_mode(
     class_mode: Mode, critic_mode: Mode
 ) -> None:
+    """The class mode is not a ceiling on its critics' modes.
+
+    Making it one costs the operator the rollout: section 5.3 step 0 demotes a
+    hard critic on the critic's *own* mode, so a class whose critics were all
+    forced down to the class mode would resolve every shadow proposal to
+    ``ALLOW``. The rollout report would then read as a clean week when the
+    program had simply stopped evaluating.
+    """
     entry = action_class(
         mode=class_mode,
         effect_class=EffectClass.WRITE,
@@ -202,27 +208,54 @@ def test_rule_c_accepts_a_critic_no_more_enforcing_than_its_class(
     assert entry.critics[0].mode is critic_mode
 
 
-@pytest.mark.parametrize(
-    ("class_mode", "critic_mode"),
-    [
-        (Mode.SHADOW, Mode.ADVISORY),
-        (Mode.SHADOW, Mode.ENFORCE),
-        (Mode.ADVISORY, Mode.ENFORCE),
-        (Mode.ENFORCE, Mode.HALTED),
-    ],
-)
-def test_rule_c_rejects_a_critic_more_enforcing_than_its_class(
-    class_mode: Mode, critic_mode: Mode
-) -> None:
-    """A critic may be advisory inside an enforce class, never the reverse."""
+def test_rule_c_admits_an_enforcing_critic_inside_a_shadow_class() -> None:
+    """Scenario ``A-16``: this exact entry is what a shadow rollout measures.
+
+    A shadow class exists to answer "what would enforcement have denied this
+    week?". It can only answer while its hard critics still block in the
+    verdict, because the class mode is consulted at the broker, after the
+    record is written (``INV-11``). A registry that refuses to hold an
+    ``enforce`` critic inside a ``shadow`` class makes the question
+    unaskable, and an operator would promote the class on evidence that never
+    existed.
+    """
+    entry = action_class(
+        mode=Mode.SHADOW,
+        effect_class=EffectClass.WRITE,
+        critics=(critic(id="pdp.deploy", mode=Mode.ENFORCE),),
+    )
+
+    assert entry.mode is Mode.SHADOW
+    assert not entry.mode.blocks_on_verdict
+    # The critic keeps its own declared mode, which is what step 0 reads.
+    assert entry.hard_critics == entry.critics
+    assert entry.critics[0].mode is Mode.ENFORCE
+
+
+@pytest.mark.parametrize("class_mode", CLASS_ROLLOUT_MODES)
+def test_rule_c_rejects_a_critic_declaring_the_halted_lever(class_mode: Mode) -> None:
+    """``halted`` on a critic silently disarms it instead of arming it.
+
+    Resolution demotes every critic mode that is not ``enforce``, so the
+    strongest-sounding word in the vocabulary would turn the gate off. An
+    operator halting a runaway critic that way would believe the action was
+    stopped while every proposal sailed through it.
+    """
     with pytest.raises(ValidationError) as exc:
-        action_class(mode=class_mode, critics=(critic(mode=critic_mode),))
-    assert "more" in message(exc) and "enforcing" in message(exc)
-    assert critic_mode.value in message(exc)
+        action_class(mode=class_mode, critics=(critic(mode=Mode.HALTED),))
+    assert Mode.HALTED.value in message(exc)
+    assert "FR-49" in message(exc)
 
 
-def test_mode_rank_is_the_ordering_rule_c_uses() -> None:
+def test_mode_rank_orders_enforcement_without_constraining_critics() -> None:
+    """``rank`` is a report ordering, not the gate it used to be.
+
+    Kept because rollout tooling sorts by it. If it silently became a
+    comparison between a class and its critics again, the shadow rollout of
+    scenario ``A-16`` would stop being expressible.
+    """
     assert Mode.SHADOW.rank < Mode.ADVISORY.rank < Mode.ENFORCE.rank < Mode.HALTED.rank
+    assert action_class(mode=Mode.SHADOW, critics=(critic(mode=Mode.ENFORCE),)).mode is Mode.SHADOW
 
 
 # --- rule (d): repair budget bounds (section 5.4, FR-91) --------------------

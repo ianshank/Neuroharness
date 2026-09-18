@@ -124,6 +124,68 @@ def test_bad_settings_fail_at_startup_not_at_runtime(environ: dict[str, str]) ->
         Settings.from_env(environ)
 
 
+def test_a_misspelled_setting_fails_at_startup_instead_of_defaulting() -> None:
+    """A typo in a manifest must not leave the operator believing a control is set.
+
+    ``NEUROHARNESS_REPAIR_BUDGT=1`` reads correct to everyone who reviews the
+    deployment, and reading only the known fields would let it do nothing while
+    the documented default stayed in force. The harness would then run a repair
+    budget nobody chose, and the first sign of it would be behaviour that
+    contradicts the manifest during an incident. ``extra="forbid"`` cannot
+    catch this: a name nobody recognises never reaches the model.
+    """
+    with pytest.raises(ConfigurationError) as exc:
+        Settings.from_env({"NEUROHARNESS_REPAIR_BUDGT": "1"})
+
+    # The operator has to be able to find the typo from the message alone.
+    assert "NEUROHARNESS_REPAIR_BUDGT" in str(exc.value)
+    assert "NEUROHARNESS_REPAIR_BUDGET" in str(exc.value)
+
+
+def test_every_unknown_variable_in_the_namespace_is_named_at_once() -> None:
+    """Reporting one typo at a time turns a bad manifest into a restart loop.
+
+    Each restart of a fail-closed harness is a window in which nothing is
+    evaluated, so the refusal has to be complete the first time.
+    """
+    with pytest.raises(ConfigurationError) as exc:
+        Settings.from_env(
+            {"NEUROHARNESS_TOKEN_TTL": "30", "NEUROHARNESS_SIGNING_ALGO": "ed25519"}
+        )
+
+    assert "NEUROHARNESS_TOKEN_TTL" in str(exc.value)
+    assert "NEUROHARNESS_SIGNING_ALGO" in str(exc.value)
+
+
+def test_variables_outside_the_namespace_are_not_the_harness_s_business() -> None:
+    """The process environment is shared; only the prefix belongs to settings.
+
+    Refusing to start over an unrelated variable would make the harness
+    impossible to deploy beside anything else, and a control that cannot be
+    deployed gets switched off.
+    """
+    settings = Settings.from_env(
+        {
+            "PATH": "/usr/bin",
+            "REPAIR_BUDGT": "1",
+            "OTHER_HARNESS_REPAIR_BUDGET": "1",
+            "NEUROHARNESS_REPAIR_BUDGET": "1",
+        }
+    )
+    assert settings.repair_budget == 1
+
+
+def test_the_default_signing_algorithm_is_the_one_the_adr_chose() -> None:
+    """``ADR-0019``: HMAC-SHA256 is for single-process deployments only.
+
+    The gateway and the broker are separate processes, so a shared-secret
+    default hands the broker the key that mints the tokens it exists to verify.
+    A broker that can mint its own authorisation is not constrained by one, and
+    nothing in a record would show that the separation had never existed.
+    """
+    assert Settings.from_env({}).signing_algorithm is SigningAlgorithm.ECDSA_P256
+
+
 def test_settings_are_frozen_and_reject_unknown_fields() -> None:
     """Settings a component can edit are settings nothing downstream can trust.
 
