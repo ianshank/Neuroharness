@@ -116,9 +116,20 @@ A property test asserts the two directions that are currently broken: every stri
 
 **Which grammar wins is a decision, not a merge.** Hyphens in kind segments are what deployments actually write; underscores are what the record model permits. Picking hyphens means the registry is right and the record model narrows; picking both means widening two patterns and the published schemas. It needs an ADR because the published schema is an external contract (§11, `D-1`).
 
-### 4.2 `FactState` cannot represent a waveable hard gate (`INV-04`, §5.5)
+### 4.2 Fact escalation — a specification defect, and the plan's own first answer was wrong
 
-Move the rule from the loader to the type: `FactState.__post_init__` refuses `required=True, escalatable=True` with a typed fail-closed error. The loader keeps its check — defence in depth across a boundary the loader will stop owning — and a mutation fixture proves the type refuses the shape. This is the repair that must land before any line of `facts/` is written, and the reason §3 sequences the tracks the way it does.
+The hole is real: the resolver never checks `fact.required`, `FactState` is a plain frozen dataclass with no validation, and the §5.5 safety property is held entirely by the loader being the only producer. Adding fact providers adds a second producer.
+
+**The obvious repair does not work, and it is worth recording why.** This plan's first answer was "move the rule to the type: `FactState.__post_init__` refuses `required=True, escalatable=True`". Checked against the suite: `tests/unit/test_resolver_truth_table.py:80`'s `fact()` helper defaults `required=True`, and four rows pass `escalatable=True` — `escalate/escalatable-fact-missing` (:314), `abstain/provider-error-is-never-escalatable` (:338), `deny/exhausted-budget-cannot-be-softened-into-an-approval-request` (:418) and `deny/approval-not-permitted-beats-an-escalatable-abstention` (:436). **Those four are the only rows that exercise the resolver's fact-escalation arm at all.** Making the shape unconstructible would delete them, which is the line `CLAUDE.md` draws, and would leave a resolver branch with no coverage.
+
+Pulling that thread reaches the actual defect, which is one layer up. §5.5 says escalation is *"never for facts marked `required: true`"*; `FactRequirement._check_escalation` enforces it; and a non-required fact never blocks, because `FactState.blocks` is `required and not status.is_usable`. So **the specification defines a feature whose enabling conditions it also makes mutually exclusive.** Worse, `ActionClass._check_escalatable_facts_exist` *requires* a class that declares fact escalation to carry at least one `escalatable: true` fact — the registry mandates a configuration that is provably inert. Two registry knobs are read by the resolver and can never change its output, which by this increment's own constraint 2 (§8) makes them decoration.
+
+So this is not a repair to schedule; it is a question to answer, and it belongs to product and security rather than to whoever writes the code (`D-7`, §11): **does a missing or stale *required* fact ever warrant human escalation?**
+
+- **If yes** — §5.5 is wrong and the loader rule is the bug. Loosen the loader, keep the resolver arm and all four truth-table rows, and the `FactState` check becomes "escalatable implies the class permits fact escalation", which is a real constraint a provider can violate.
+- **If no** — the resolver's fact-escalation arm, the per-fact `escalatable` flag, `escalate_on ∩ {FACT_MISSING, FACT_STALE, FACT_PROVIDER_ERROR}` and `_check_escalatable_facts_exist` are all specification-level dead code and come out together, §5.5 is amended, and the four rows go away *because the behaviour they test no longer exists* — which is not weakening a test.
+
+Either answer closes the hole; neither can be chosen by an engineer. What cannot happen is shipping fact providers while the question is open, because the first `FactState(required=True, escalatable=True)` a provider constructs waves a hard gate through and no fixture would catch it. **This is therefore a hard precondition on §6.9, alongside `P0-06`.**
 
 ### 4.3 `EvaluationOutcome` makes the bad state unrepresentable (`INV-05` class)
 
@@ -134,7 +145,7 @@ Move the rule from the loader to the type: `FactState.__post_init__` refuses `re
 
 ### 4.6 Two data tables become one asserted invariant (resolver coverage)
 
-`resolver.py:175` and `:180` are unreachable because `_CRITIC_REASON_BY_RESULT`'s keys happen to be a superset of `is_indeterminate`'s results, and `_FACT_REASON_BY_STATUS`'s keys happen to be a superset of the non-usable statuses. Nothing asserts either nesting. Add one `VerifierResult` member and the branch goes live — and its behaviour is to **silently drop an abstention reason from the record**, which is the quietest possible failure in a system whose constitution says an unrecorded decision was not made. Replace both narrowings with an import-time totality check of the same shape as `safety.py:74`, and the guards become unconditional.
+`resolver.py:175` and `:180` are unreachable because `_CRITIC_REASON_BY_RESULT`'s keys happen to be a superset of `is_indeterminate`'s results, and `_FACT_REASON_BY_STATUS`'s keys happen to be a superset of the non-usable statuses. Nothing asserts either nesting. Add one `VerifierResult` member and the branch goes live — and its behaviour is to **silently drop an abstention reason from the record**, which is the quietest possible failure in a system whose constitution says an unrecorded decision was not made. Replace both narrowings with an import-time totality check of the same shape as `safety.py:74`, and the guards become unconditional. The check is writable today and the nesting was verified: `_CRITIC_REASON_BY_RESULT` covers `{FAIL, UNKNOWN, TIMEOUT, ERROR}` while `CriticOutcome.is_indeterminate` is `{UNKNOWN, TIMEOUT, ERROR}`, and `_FACT_REASON_BY_STATUS` covers `{MISSING, STALE, PROVIDER_ERROR}` which is exactly `FactStatus` minus `FRESH`. Both nestings hold by coincidence and nothing states them, which is the whole finding. The assertion is: every `VerifierResult` for which `is_indeterminate` is true, and every `FactStatus` for which `is_usable` is false, has a table entry — so adding a sixth `VerifierResult` or a fifth `FactStatus` fails at import rather than silently dropping an abstention reason from a record.
 
 Also close the four genuinely untested paths the audit named: `pipeline/decision.py:506-515` (the `token_issued` validation handler — the `C-01` defect class repeating on the second record, fixed and never executed), `models/record.py:850` (`FR-48` override window floor, on the one *loosening* override), `tokens/nonce.py:291-293` (the revocation reason an operator reads during a key-compromise incident), `models/record.py:193`.
 
@@ -297,7 +308,8 @@ Carried from increment 1 unchanged, because they are why increment 1 survived th
 | OPA sidecar, signed Rego bundles, policy pack | `P1-04`, `P1-15` | `P1-18` ← `P0-06`; also CI stage 6 (testcontainers). A Python stand-in is excluded on Article V grounds (§2) |
 | Broker, leases, connectors, receipts, effect critic | `P1-08` | `P0-13`. An out-of-process broker on today's HMAC signer puts the minting key in the component that is supposed to be unable to mint — a design violation, not a shortcut |
 | Approval service | `P1-10a` | `P1-18`. `harness_approval` is specified as a *fact*, so the provider interface is its seam |
-| PostgreSQL evidence store, checkpoint anchoring | `P1-06a` durable half, `P1-06b` | `P0-13` object storage; `P1-27` migrations land here as the enabler |
+| PostgreSQL evidence store | `P1-06a` durable half | **Not blocked by `P0-13`** — a container in CI is not provisioned infrastructure, and the WBS lists `P1-06a` as unblocked. Deferred for a reason this plan creates: §4.4 must decide `D-5` (ledger retention and compensation) *before* the ledger is a database, or the wedge is built into PostgreSQL and becomes unrecoverable. It is also an `L` against a four-week increment that already carries two tracks, and it needs CI stage 6 (testcontainers), which does not exist. `P1-27` lands here as its enabler, and it is increment 3's first item |
+| Checkpoint anchoring, pseudonymization, crypto-shredding, retention | `P1-06b` | `P0-13` object storage; `OQ-05` is owned by Compliance, unnamed until `P0-12` |
 | Identity and session tree | part of `P1-01a` | `P0-13`. Nothing can legitimately produce `CredentialStatus.VERIFIED` without an identity provider |
 | Repair loop resubmission | `FR-90`–`FR-92` | The response type (§6.3) carries counterexamples; the loop is an orchestrator concern once there is an orchestrator |
 
@@ -306,11 +318,12 @@ Carried from increment 1 unchanged, because they are why increment 1 survived th
 ## 10. Sequencing and no-go criteria
 
 ```
-Week 1   T1: §4.1 grammar · §4.2 FactState · §4.3 EvaluationOutcome
+Week 1   T1: §4.1 grammar · §4.3 EvaluationOutcome · §4.2 raised as D-7
          T2: P0-06 drafted · P0-11 · uv.lock + tool config
          T3: CI stage 1 (defaults, blocking) · stage 11 id-checker
 Week 2   T1: §4.4 ledger · §4.5 subject shapes · §4.6 totality + 4 tests
-         T2: P0-06 reviewed  ◀── MIDPOINT GATE for §6.9
+         T2: P0-06 reviewed · D-7 answered  ◀── MIDPOINT GATE for §6.9
+         T1: §4.2 implemented per D-7's answer
          T3: §6.2 digest convention · §6.3 response type · §6.7 Article IV ratchet
 Week 3   T3: §6.1 envelope builder · §6.4 hot reload · §6.5 migrations
          T3: §6.8 A-xx registry · gitleaks · pip-audit · ruff ratchet
@@ -320,7 +333,7 @@ Week 4   T3: §6.9 P1-18 if the midpoint gate passed, else buffer
 
 **No-go criteria — stop and escalate rather than proceed:**
 
-1. `P0-06` cannot settle the anti-laundering clause because no named owner exists to settle it → this is `P0-12`, and §6.9 is cancelled, not fudged.
+1. `P0-06` cannot settle the anti-laundering clause, or `D-7` cannot be answered, because no named owner exists to settle either → this is `P0-12`, and §6.9 is cancelled, not fudged.
 2. §4.1's grammar decision would break the published schema for a consumer we do not know about → confirm there is no such consumer before narrowing; if there is, the decision changes.
 3. Any repair in §4 cannot be made without weakening a test → surface it; do not proceed.
 4. The Article IV ratchet list grows during the increment → a hard rule was added without a fixture, which is the thing the ratchet exists to stop.
@@ -339,6 +352,7 @@ Named here rather than made silently by whoever writes the code first. Each need
 | **D-4** | `EvaluationOutcome`'s shape | Flag on both paths · demote verdict on both · one discriminated shape | The consumer is written in increment 2 |
 | **D-5** | Issuance-ledger retention and compensation | Compensating release · never-purge with a documented operator path · bounded retention | It becomes unrecoverable data the moment the ledger is PostgreSQL |
 | **D-6** | ADR status | Accept the 21 · keep them `Proposed` | Two are in force in shipping code while `Proposed`, and the immutability rule has never engaged |
+| **D-7** | Does a missing or stale **required** fact ever warrant human escalation? | Yes — §5.5 and the loader rule are wrong · No — the resolver arm and two registry knobs are dead and come out | §4.2. Product and security own it. It is a hard precondition on §6.9: fact providers cannot ship while it is open |
 
 ---
 
@@ -347,7 +361,7 @@ Named here rather than made silently by whoever writes the code first. Each need
 Beyond the standing Definition of Done in `06-delivery-and-governance.md` §6:
 
 1. Every string the resource-key registry accepts is recordable, and every string the record model accepts resolves — asserted by a property test that **fails on the tree as merged**.
-2. `FactState(required=True, escalatable=True)` is unconstructible, with a killing fixture.
+2. `D-7` is answered and §5.5 says what the code does. Whichever answer: no producer can construct a `FactState` that waves a hard gate, proved by a killing fixture, and no truth-table row was deleted for a behaviour that still exists.
 3. `EvaluationOutcome` cannot represent `ALLOW` with no token and no failure signal.
 4. A `decision_id` whose `token_issued` record failed can be retried, with a test that drives the retry.
 5. Reason-code subject shapes have one source of truth, and `TokenInvalidReason` can gain a member in one edit.
