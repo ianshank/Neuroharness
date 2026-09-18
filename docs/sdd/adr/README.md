@@ -27,3 +27,4 @@ Format: [MADR](https://adr.github.io/madr/) (Context → Decision → Alternativ
 | [ADR-0021](ADR-0021-canonical-number-encoding.md) | Exact integers in canonicalisation, with a rule that makes the deviation unreachable | Proposed | Raised by implementation |
 | [ADR-0022](ADR-0022-fact-provider-anti-laundering.md) | The anti-laundering relation is derived from action-class writes, not enumerated per provider | Proposed | Increment-2 `D-2` (`P0-06`) |
 | [ADR-0023](ADR-0023-one-resource-key-grammar.md) | One resource-key grammar, owned by the registry and rendered into everything else | Proposed | Increment-2 `D-1` |
+| [ADR-0024](ADR-0024-bounded-argument-schema-evaluation.md) | A bounded, closed-vocabulary evaluator for `argument_schema`, not a JSON Schema dependency | Proposed | Increment-2 `D-3` |
