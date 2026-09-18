@@ -26,7 +26,10 @@ A fail-closed policy-and-verification harness for LLM agent tool calls. See `REA
 
 ## Where things will live (once implementation starts)
 ```
-src/neuroharness/    runtime (gateway, PDP client, critics, broker, evidence)
+src/neuroharness/    runtime core: reason, errors, defaults, seams, config,
+                     observability, models, canonical, registry, resolve,
+                     tokens, evidence, pipeline; then gateway, PDP client,
+                     critics, broker
 policy/              Rego bundles + tests + mutation fixtures
 critics/             Z3 contract packs, Prolog rulebase, FSA specs
 fixtures/            replay trajectories, negative mutations, golden decisions

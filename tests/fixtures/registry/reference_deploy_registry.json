@@ -1,0 +1,130 @@
+{
+  "schema_version": "1.0",
+  "registry_version": "2026.09.18-2",
+  "digest": "sha256:ecc1e7afadf35ac05a8aec39602f9bcfb59588498334aa775afb246f912fd407",
+  "unregistered_class_policy": "strict",
+  "resource_keys": {
+    "enumerations": {
+      "service": ["checkout", "payments", "search", "notifications"],
+      "target": ["development", "test", "staging", "production"]
+    }
+  },
+  "action_classes": [
+    {
+      "tool": "deployment.apply",
+      "intent": "deploy_service",
+      "effect_class": "write",
+      "argument_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["service", "version", "target", "replicas"],
+        "properties": {
+          "service": {"enum": ["checkout", "payments", "search", "notifications"]},
+          "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+          "target": {"enum": ["development", "test", "staging", "production"]},
+          "replicas": {"type": "integer", "minimum": 1, "maximum": 50}
+        }
+      },
+      "resource_key_template": "service:{service}/target:{target}",
+      "connector_kind": "async",
+      "lease_timeout_seconds": 1800,
+      "required_facts": [
+        {"name": "ci_result", "key": ["service", "version"], "max_age_seconds": 900, "required": true, "escalatable": false},
+        {"name": "change_approval", "key": ["service", "version", "target"], "max_age_seconds": 3600, "required": true, "escalatable": false},
+        {"name": "deploy_state", "key": ["service", "target"], "max_age_seconds": 60, "required": true, "escalatable": false},
+        {"name": "harness_approval", "key": ["proposal_digest"], "max_age_seconds": 300, "required": false, "escalatable": false}
+      ],
+      "critics": [
+        {"id": "pdp.deploy.allowlist", "kind": "rego", "hard": true, "mode": "enforce", "source_requirement": "WF-01"},
+        {"id": "pdp.deploy.production-approval", "kind": "rego", "hard": true, "mode": "enforce", "source_requirement": "WF-02"},
+        {"id": "pdp.deploy.delegation", "kind": "rego", "hard": true, "mode": "enforce", "source_requirement": "WF-03"},
+        {"id": "pdp.deploy.ci-evidence", "kind": "rego", "hard": true, "mode": "enforce", "source_requirement": "WF-04"},
+        {"id": "pdp.deploy.change-record", "kind": "rego", "hard": true, "mode": "enforce", "source_requirement": "WF-05"},
+        {"id": "fsa.deploy-order", "kind": "monitor", "hard": true, "mode": "advisory", "source_requirement": "WF-06a", "properties": ["WF-06a"], "certified_model": null},
+        {"id": "pdp.deploy.change-window", "kind": "rego", "hard": true, "mode": "enforce", "source_requirement": "WF-06b"},
+        {"id": "pdp.deploy.in-flight", "kind": "rego", "hard": true, "mode": "enforce", "source_requirement": "WF-06c"},
+        {"id": "smt.version-contract", "kind": "smt", "hard": true, "mode": "enforce", "timeout_ms": 200, "rlimit": 2000000, "source_requirement": "01-specification.md#3.5-typed-contract"},
+        {"id": "effect.deploy-state", "kind": "effect", "hard": true, "mode": "enforce", "source_requirement": "FR-57"},
+        {"id": "prolog.deploy-hints", "kind": "prolog", "hard": false, "mode": "advisory", "timeout_ms": 100, "source_requirement": "01-specification.md#3.5-deploy-hints"}
+      ],
+      "mode": "enforce",
+      "approvable": true,
+      "escalate_on": [],
+      "approver_groups": ["release-managers"],
+      "batch_policy": "independent",
+      "repair_budget": 3,
+      "token_ttl_seconds": 60,
+      "approval_ttl_seconds": 86400
+    },
+    {
+      "tool": "deployment.apply",
+      "intent": "rollback",
+      "effect_class": "destructive",
+      "argument_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["service", "target", "to_version"],
+        "properties": {
+          "service": {"enum": ["checkout", "payments", "search", "notifications"]},
+          "target": {"enum": ["development", "test", "staging", "production"]},
+          "to_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}
+        }
+      },
+      "resource_key_template": "service:{service}/target:{target}",
+      "connector_kind": "async",
+      "lease_timeout_seconds": 1800,
+      "required_facts": [
+        {"name": "ci_result", "key": ["service", "to_version"], "max_age_seconds": 900, "required": true, "escalatable": false},
+        {"name": "deploy_state", "key": ["service", "target"], "max_age_seconds": 60, "required": false, "escalatable": true},
+        {"name": "harness_approval", "key": ["proposal_digest"], "max_age_seconds": 300, "required": false, "escalatable": false}
+      ],
+      "critics": [
+        {"id": "pdp.rollback.allowlist", "kind": "rego", "hard": true, "mode": "enforce", "source_requirement": "WF-01"},
+        {"id": "pdp.rollback.approval", "kind": "rego", "hard": true, "mode": "enforce", "source_requirement": "WF-02"},
+        {"id": "pdp.rollback.delegation", "kind": "rego", "hard": true, "mode": "enforce", "source_requirement": "WF-03"},
+        {"id": "pdp.rollback.ci-evidence", "kind": "rego", "hard": true, "mode": "enforce", "source_requirement": "WF-04"},
+        {"id": "fsa.rollback-order", "kind": "monitor", "hard": true, "mode": "advisory", "source_requirement": "WF-06a", "properties": ["WF-06a"]},
+        {"id": "pdp.rollback.in-flight", "kind": "rego", "hard": true, "mode": "enforce", "source_requirement": "WF-06c"},
+        {"id": "smt.rollback-contract", "kind": "smt", "hard": true, "mode": "enforce", "timeout_ms": 200, "rlimit": 2000000, "source_requirement": "01-specification.md#3.5-typed-contract"},
+        {"id": "effect.rollback-state", "kind": "effect", "hard": true, "mode": "enforce", "source_requirement": "FR-57"}
+      ],
+      "mode": "enforce",
+      "approvable": true,
+      "escalate_on": ["SOLVER_TIMEOUT", "FACT_STALE"],
+      "approver_groups": ["release-managers", "incident-commanders"],
+      "batch_policy": "all_or_nothing",
+      "repair_budget": 0,
+      "token_ttl_seconds": 60,
+      "approval_ttl_seconds": 900
+    },
+    {
+      "tool": "deployment.status",
+      "intent": "get_status",
+      "effect_class": "read",
+      "argument_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["service", "target"],
+        "properties": {
+          "service": {"enum": ["checkout", "payments", "search", "notifications"]},
+          "target": {"enum": ["development", "test", "staging", "production"]}
+        }
+      },
+      "resource_key_template": null,
+      "connector_kind": "sync",
+      "lease_timeout_seconds": 1800,
+      "required_facts": [],
+      "critics": [
+        {"id": "pdp.status.allowlist", "kind": "rego", "hard": true, "mode": "enforce", "source_requirement": "WF-01"}
+      ],
+      "mode": "enforce",
+      "approvable": false,
+      "escalate_on": [],
+      "approver_groups": [],
+      "batch_policy": "independent",
+      "repair_budget": 0,
+      "token_ttl_seconds": 60,
+      "approval_ttl_seconds": 86400
+    }
+  ]
+}

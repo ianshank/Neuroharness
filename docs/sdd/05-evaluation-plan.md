@@ -17,9 +17,21 @@ Fixtures are authored early and land their gates late, so a fixture has a state:
 |---|---|---|
 | `reserved` | ID and intent exist; the gate does not yet | Recorded, not run, not blocking |
 | `active` | The gate exists; the fixture proves it blocks | **Blocking**: must be killed |
+| `partial` | One component owns part of the check; the rest of the gate is not built yet | **Blocking at that layer**, and explicitly *not* counted toward hard-gate coverage. The fixture file names the unreached clause. |
 | `retired` | Superseded or withdrawn | Requires an ADR reference in the change |
 
 A fixture is activated in the same change that lands its gate. To stop `reserved` being a parking lot, a separate blocking check asserts that **every hard rule in the action-class registry has an active fixture** (Constitution Art. IV). Without this lifecycle the gate is red from the first Phase 1 merge until Phase 3, which is incompatible with short-lived branches.
+
+`partial` exists because the alternative is worse. Marking a fixture `active`
+when only half its gate is built produces a green, override-free CI stage that
+proves a gate nobody wrote, which retires the pressure to write it. A `partial`
+fixture still runs and still blocks at the layer it covers, but it does not let
+the coverage check believe the requirement is met.
+
+Two fixture artifact kinds exist, and they are not interchangeable: an
+`envelope_case` is a checked-in envelope evaluated end to end, while a
+`resolver_case` is a registry entry plus verifier outcomes and an expected
+verdict, used where the gate is the resolution procedure itself.
 
 ## 2. Quality gates summary
 | Gate | Threshold | Blocking from |

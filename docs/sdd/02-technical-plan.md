@@ -413,9 +413,26 @@ Counterexamples are returned as the gateway's typed response. The governed runti
 
 ## 10. Repository layout (target)
 
+The decision core does not live inside the transport adapter: canonicalisation,
+resolution, tokens and evidence are reachable without importing the gateway, so
+they can be tested and reused by any front end (`ADR-0020` records the layout).
+
 ```
 src/neuroharness/
-  gateway/        MCP server, hook adapter API, envelope builder, canonicalization
+  reason.py       closed reason-code catalogue
+  errors.py       typed fail-closed exception hierarchy
+  defaults.py     the single home for documented default values
+  seams.py        Clock, IdGenerator and other injection protocols
+  config.py       deployment settings
+  observability/  structured logging, context binding, redaction
+  models/         envelope, decision record, shared enums
+  canonical/      JCS canonicalisation, proposal and envelope digests
+  registry/       action-class and resource-key registries
+  resolve/        safety order and the verdict procedure
+  tokens/         signer, nonce store, issue / verify / consume
+  evidence/       hash chain, append-only store, write-ahead log
+  pipeline/       sequences resolve -> record -> token
+  gateway/        MCP server, hook adapter API, envelope builder
   registry/       registry models, loader, signature verification
   facts/          provider interface + v1 providers
   pdp/            OPA client, input-document builder, outcome mapping

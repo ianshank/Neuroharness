@@ -26,8 +26,32 @@ In 2026 most implementation work on a project like this will be done by humans d
 | `06-delivery-and-governance.md` | v0.2 | Delivery lead | 2026-09-18 |
 | `adr/` | ADR-0001..0019; 0007, 0008, 0009, 0010 superseded | Tech lead | 2026-09-18 |
 | `schemas/*.schema.json` | v1.1 | Tech lead | 2026-09-18 |
+| `07-increment-1-plan.md` | Revised after peer review; implementation in progress | Tech lead | 2026-09-18 |
 
 Both review rounds are in `../review/`: round 1 reviewed the research, round 2 reviewed the specification that answered it and re-audited round 1.
+
+## From specification to code
+
+Increment 1 (`07-increment-1-plan.md`) implements the deterministic core in
+`src/neuroharness/`. The mapping is deliberately one-to-one so that a reader can
+go from a requirement to the code that satisfies it without a search:
+
+| Requirement | Module |
+|---|---|
+| `FR-04` two digests | `canonical/digest.py` |
+| `FR-05`, §5.3 resolution | `resolve/resolver.py`, `resolve/safety.py` |
+| `FR-20`–`FR-23` tokens | `tokens/` |
+| `FR-70`–`FR-72` evidence | `evidence/` |
+| `FR-30`–`FR-35` registry | `registry/` |
+| `INV-05`, `INV-11` ordering | `pipeline/decision.py` |
+| `SEC-07` typed reasons | `reason.py` |
+| `NFR-18` redaction | `observability/logging.py` |
+| `NFR-13` clock failure | `seams.py` |
+
+Implementation has already fed one correction back into the specification: §5.3
+step 0 demoted every hard critic in a shadow *class*, which made the verdict
+mode-dependent and contradicted `INV-11` and scenario `A-16`. See the
+specification change log, version 0.4.
 
 ## ID conventions
 

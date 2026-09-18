@@ -23,3 +23,4 @@ Format: [MADR](https://adr.github.io/madr/) (Context → Decision → Alternativ
 | [ADR-0017](ADR-0017-broker-enforced-resource-leases.md) | Mutual exclusion is a broker lease, not a monitor property | Proposed | Round 2 `R2-S4` |
 | [ADR-0018](ADR-0018-post-execution-effect-verification.md) | Verify effects after execution where an authoritative state fact exists | Proposed | Round 2 `R2-B3` |
 | [ADR-0019](ADR-0019-implementation-stack-revision.md) | Implementation stack revision: key algorithm, solver bounding, Prolog deferral | Proposed (supersedes 0009) | Round 2 `R2-D5`, `R2-D16`, `R2-D17` |
+| [ADR-0020](ADR-0020-proposal-digest-field-set.md) | The proposal digest covers a fixed, narrow projection | Proposed (amends 0015) | Increment-1 review |
