@@ -1,6 +1,6 @@
 # Neuroharness Technical Plan
 
-**Status:** Draft v0.1 — ready for review · **Date:** 2026-09-18 · **Implements:** `01-specification.md` · **Constrained by:** `00-constitution.md`, `04-threat-model.md`
+**Status:** Draft v0.2 — revised after round-two review · **Date:** 2026-09-18 · **Implements:** `01-specification.md` · **Constrained by:** `00-constitution.md`, `04-threat-model.md`
 
 ## 1. Design principles applied
 
@@ -9,7 +9,9 @@
 3. **Digest everywhere.** The envelope digest is the identity of an action across evaluation, approval, token, execution and audit.
 4. **Deterministic core, bounded non-determinism.** Solvers run with timeouts and seeds; a timeout can only move a verdict toward `ABSTAIN`.
 5. **Registry-driven.** Which critics run, in which mode, with what budgets, is data (signed, versioned), not code.
-6. **Same path in every mode.** Shadow, advisory and enforce differ only in whether the broker consults the verdict; evaluation and recording are identical, so shadow data is representative.
+6. **Same path in every mode.** Shadow, advisory and enforce differ only in whether the broker consults the *verdict*; evaluation, recording and token issuance are identical, so shadow data is representative. Infrastructure failures block in every mode (`INV-03`, `FR-80`); `halted` denies everything.
+7. **Two identities per action.** The *proposal digest* is what a human approves and what survives re-evaluation; the *envelope digest* is what a token authorizes. Conflating them either freezes stale evidence or voids every approval (`ADR-0008`).
+8. **Enforcement that cannot wait for certification lives in the broker.** Mutual exclusion is a lease, not a monitor property, so it holds from day one (`FR-25`).
 
 ## 2. Architecture
 
@@ -72,36 +74,64 @@ sequenceDiagram
   participant BR as Broker
   participant Tool
   Agent->>GW: tool call (proposal)
-  GW->>GW: schema-validate, build envelope (proposal + context)
-  GW->>REG: lookup action class (critics, mode, budgets)
-  GW->>FP: fetch required facts (with TTL)
-  GW->>GW: canonicalize (JCS), digest, stamp versions
+  GW->>GW: strip context keys, validate argument schema, build envelope
+  GW->>REG: look up action class (critics, mode, budgets, resource key)
+  GW->>FP: fetch required facts (parallel, TTL)
+  GW->>GW: canonicalize, compute proposal and envelope digests, stamp versions
   GW->>PDP: input document (context and facts only)
-  PDP-->>GW: rule outcomes
-  GW->>CB: envelope + facts to registered critics (timeouts)
+  PDP-->>GW: per-rule outcomes
+  GW->>CB: envelope and facts to registered critics (bounded)
   CB-->>GW: typed results
   GW->>GW: resolve verdict (spec section 5.3)
-  GW->>EV: append decision record (write-ahead)
+  GW->>EV: append evaluation record (write-ahead)
   EV-->>GW: durable ack
-  alt ALLOW
-    GW->>TK: issue token bound to digest
-    GW->>BR: envelope + token
-    BR->>BR: recompute digest, verify and consume token
+  alt ALLOW, or shadow/advisory with no infrastructure failure
+    GW->>TK: issue token (digest, verdict, mode)
+    TK->>EV: append token_issued record
+    GW->>BR: envelope and token
+    BR->>BR: recompute digest, verify verdict/mode/bundle/revocation, consume nonce
+    BR->>BR: acquire resource lease
     BR->>Tool: execute
-    Tool-->>BR: result
+    Tool-->>BR: result or job handle
     BR->>EV: execution receipt
     BR-->>Agent: typed result, tagged untrusted
-  else REPAIR
-    GW-->>Agent: typed counterexamples
   else REQUIRES_APPROVAL
-    GW->>EV: approval request bound to digest
+    GW->>EV: approval request bound to proposal digest
     GW-->>Agent: pending approval reference
+  else REPAIR
+    GW-->>Agent: typed counterexamples and action_id
   else DENY or ABSTAIN
     GW-->>Agent: reason codes
   end
 ```
 
-Timing budget per stage (`NFR-01`–`NFR-03`): schema+build ≤ 3 ms; fact fetch (cached, parallel) ≤ 20 ms p95; PDP ≤ 10 ms; SMT critic ≤ 200 ms timeout; monitor ≤ 5 ms; record write ≤ 10 ms; token issue ≤ 2 ms.
+**Approval resolution is a second evaluation, not a deferred token** (`FR-47`, `ADR-0008`):
+
+```mermaid
+sequenceDiagram
+  participant AP as Approver
+  participant AS as Approval service
+  participant GW as Gateway
+  participant FP as Fact providers
+  participant EV as Evidence store
+  participant TK as Token service
+  AS-->>AP: disclosure (proposal, facts, reasons, digest)
+  AP->>AS: approve (proposal digest, disclosure digest)
+  AS->>AS: check eligibility across the session tree
+  AS->>EV: append approval record (state approved)
+  AS->>GW: approval resolved for proposal digest
+  GW->>FP: re-fetch all required facts
+  GW->>GW: rebuild envelope, re-resolve verdict with harness_approval fact
+  GW->>EV: append fresh evaluation record
+  alt fresh verdict is ALLOW
+    GW->>TK: issue token for the NEW envelope digest
+  else fresh verdict is DENY or ABSTAIN
+    GW->>EV: approval state void, reason recorded
+    GW-->>AP: notified that the approval no longer holds
+  end
+```
+
+Timing budget per stage (`NFR-01`–`NFR-03`): strip/validate/build ≤ 3 ms; fact fetch (cached, parallel) ≤ 20 ms p95; PDP ≤ 10 ms; SMT critic bounded by solver rlimit with a 200 ms wall-clock backstop; monitor ≤ 5 ms; record write ≤ 10 ms; token issue ≤ 2 ms; lease acquisition ≤ 5 ms. Measured against the performance environment (`P1-25`), not asserted.
 
 ## 4. Components
 
@@ -114,126 +144,197 @@ Timing budget per stage (`NFR-01`–`NFR-03`): schema+build ≤ 3 ms; fact fetch
 - Validates the proposal against the tool's argument schema and the envelope schema (`FR-02`).
 - Constructs `context` from the authenticated session (actor, delegation chain from the identity layer, environment from deployment config), the registry entry, fetched facts, bundle and critic versions, trace IDs (`FR-03`, `FR-04`).
 - Strips any context-shaped keys from the proposal, recording that it did so.
-- Canonicalizes with RFC 8785 (JCS) and computes SHA-256. The digest is computed once and carried; the broker recomputes independently (`FR-21`).
+- Canonicalizes with RFC 8785 (JCS) and computes **two** SHA-256 digests: the *proposal digest* over `proposal + actor + action_class + policy_bundle` (what approvals bind to) and the *envelope digest* over the whole object (what tokens bind to). Both are carried; the broker recomputes the envelope digest independently (`FR-04`, `FR-21`).
 
 ### 4.3 Fact providers
-- Interface: `get(fact_name, key) -> Fact{value, source, fetched_at, ttl_seconds, provider_version, digest}` with a bounded timeout.
-- v1 providers: CI result (per `(service, version)`), change approval (per `(service, version, target)`), deployment state (currently deployed version, in-flight deployments), trusted clock, identity/delegation resolver.
-- Results are cached with TTL; staleness is evaluated against the *rule's* max age, not the cache's (`FR-11`).
+- Interface: `get(fact_name, key) -> Fact{value, source, asserted_by, observed_at, fetched_at, ttl_seconds, provider_version, digest}` with a bounded timeout. Providers are entries in a signed **fact-provider registry** (`FR-14`) carrying trust level, authentication and a `value_schema`.
+- v1 providers: CI result, change approval (external change record), deployment state, trusted clock, identity/delegation resolver, **harness approval** (`harness_approval`, supplied by the approval service so that oversight enters policy as a fact rather than a side channel, `FR-47`), and **execution completion** for asynchronous actions (`FR-26`).
+- **Fact laundering is the main risk here** (`SEC-11`, `T-21`): a provider whose backing system any registered tool can write to is not evidence. Either the backing system is read-only to the tenant's tools, or facts carry `asserted_by` and rules reject evidence asserted by a principal in the delegation chain.
+- Staleness is `age > min(fact.ttl_seconds, class.required_facts[].max_age_seconds)` measured on the trusted clock; a stale, missing or errored fact is handed to the PDP and critics as a **status-only stub with no value**, so no rule can read a stale value even if its author forgets the freshness check (`FR-11`, enforced by the envelope schema).
 - Provider failures produce `FACT_MISSING` (`FR-13`). Providers are enumerated in the TCB inventory.
 
 ### 4.4 Action-class registry (`FR-30`–`FR-33`)
 Signed YAML/JSON document, versioned, loaded at start and hot-reloaded atomically.
 
 ```yaml
-registry_version: 2026.09.18-1
-default_mode: strict
+registry_version: 2026.09.18-2
+unregistered_class_policy: strict       # FR-31 (was: default_mode)
+resource_keys: { $ref: resource-keys.yaml }   # FR-34, signed separately
 action_classes:
   - tool: deployment.apply
     intent: deploy_service
-    source_requirements: [WF-01, WF-02, WF-03, WF-04, WF-05, WF-06]
+    effect_class: write                 # FR-35
+    source_requirements: [WF-01, WF-02, WF-03, WF-04, WF-05, WF-06a, WF-06b, WF-06c]
+    argument_schema:                    # FR-02: policy-compared args are enumerations
+      type: object
+      additionalProperties: false
+      required: [service, version, target, replicas]
+      properties:
+        service:  {enum: !ref resource_keys.services}
+        version:  {type: string, pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'}
+        target:   {enum: [development, test, staging, production]}
+        replicas: {type: integer, minimum: 1, maximum: 50}
+    resource_key: "service:{service}/target:{target}"   # FR-25, FR-34
+    connector_kind: async                              # FR-26
+    lease_timeout_seconds: 1800
     required_facts:
-      - {name: ci_result, key: [service, version], max_age_seconds: 900}
-      - {name: change_approval, key: [service, version, target], max_age_seconds: 3600}
-      - {name: deploy_state, key: [service, target], max_age_seconds: 60}
+      - {name: ci_result,       key: [service, version],         max_age_seconds: 900,  required: true,  escalatable: false}
+      - {name: change_approval, key: [service, version, target], max_age_seconds: 3600, required: true,  escalatable: false}
+      - {name: deploy_state,    key: [service, target],          max_age_seconds: 60,   required: true,  escalatable: false}
+      - {name: harness_approval, key: [proposal_digest],         max_age_seconds: 300,  required: false, escalatable: false}
     critics:
-      - {id: pdp.deploy, kind: rego, package: neuroharness.deploy, hard: true}
-      - {id: smt.version-contract, kind: smt, contract: contracts/version.smt.yaml, hard: true, timeout_ms: 200}
-      - {id: fsa.deploy-order, kind: monitor, properties: [WF-06], hard: true, mode: shadow, certified_model: null}
-      - {id: prolog.deploy-hints, kind: prolog, hard: false, timeout_ms: 100}
+      - {id: pdp.deploy,            kind: rego,    hard: true,  mode: enforce}
+      - {id: smt.version-contract,  kind: smt,     hard: true,  mode: enforce, timeout_ms: 200, rlimit: 2000000}
+      - {id: fsa.deploy-order,      kind: monitor, hard: true,  mode: advisory, properties: [WF-06a], certified_model: null}
+      - {id: effect.deploy-state,   kind: effect,  hard: true,  mode: enforce}   # FR-57
+      - {id: prolog.deploy-hints,   kind: prolog,  hard: false, mode: advisory, timeout_ms: 100}
     mode: enforce
     approvable: true
-    abstain_escalates_to_approval: false
+    escalate_on: []                     # spec section 5.5; loader rejects this on a non-approvable class
+    approver_groups: [release-managers]
+    batch_policy: independent           # FR-07
     repair_budget: 3
     token_ttl_seconds: 60
     approval_ttl_seconds: 86400
-    approver_groups: [release-managers]
 ```
 
-Per-critic `mode` may be stricter than the class mode (a monitor can be `shadow` while the class is `enforce`). Unregistered `(tool, intent)` → `ABSTAIN` in `strict` (`FR-31`).
+A per-critic `mode` may only be *less* enforcing than the class mode (a monitor may be `advisory` inside an `enforce` class, never the reverse); the loader rejects the inverse and rejects `escalate_on` on a non-approvable class (`FR-33`). A hard critic whose effective mode is not `enforce` is treated as soft for resolution and records `would_be_verdict` (§5.3 step 0). Unregistered `(tool, intent)` → `ABSTAIN` in `strict` (`FR-31`). Classes with `effect_class` `none`/`read` take the policy-only fast path (`FR-35`).
 
 ### 4.5 Policy decision point
 - OPA running as a sidecar with signed bundles (`opa build --signing-key`, verified on load) (`SEC-05`). An in-process WASM evaluator is an accepted alternative for library deployments (`ADR-0009`).
 - Rego v1 syntax; one package per workflow; rule outcomes returned as sets so the gateway records every rule's result (`FR-72`).
 - Input document is built by the gateway and contains **no** `claims` key by construction (`SEC-01`); a schema test asserts this.
+- Every bundle ships a **rule inventory** so that passing rules can be recorded, not just failing ones (`FR-50`).
+- Policy-compared arguments are matched against registry enumerations with a default-deny rule; no rule may compare a free string (`FR-02`, `T-17`).
 
 ```rego
 package neuroharness.deploy
 
 import rego.v1
 
-deny contains {"rule": "WF-01", "repairable": false} if {
-    not data.registry.allowlist[input.environment][input.action.tool]
+# Default deny for anything not registered: an unknown target can never fall through.
+deny contains {"rule": "WF-02", "repairable": false} if {
+    not data.registry.targets[input.action.arguments.target]
 }
 
+deny contains {"rule": "WF-01", "repairable": false} if {
+    not data.registry.allowlist[input.context.actor.environment][input.action.tool]
+}
+
+# Evidence rules read facts only, and only fresh ones: a stale fact arrives
+# without a value, so `status == "fresh"` is structurally required.
 deny contains {"rule": "WF-04", "repairable": false} if {
+    input.facts.ci_result.status == "fresh"
     input.facts.ci_result.value.status == "failed"
 }
 
+# SEC-11: evidence the agent could have manufactured is not evidence.
+deny contains {"rule": "WF-04", "repairable": false} if {
+    some hop in input.context.actor.delegation_chain
+    input.facts.ci_result.asserted_by == hop.principal
+}
+
 abstain contains {"rule": "WF-04", "reason": "FACT_MISSING:ci_result"} if {
-    not input.facts.ci_result
+    input.facts.ci_result.status in {"missing", "provider_error"}
 }
 
 abstain contains {"rule": "WF-04", "reason": "FACT_STALE:ci_result"} if {
-    input.facts.ci_result.age_seconds > data.registry.fact_max_age.ci_result
+    input.facts.ci_result.status == "stale"
 }
 
+# WF-03: an unverified delegation hop cannot carry authority.
+deny contains {"rule": "WF-03", "repairable": false} if {
+    every hop in input.context.actor.delegation_chain {
+        not is_authorized_human(hop)
+    }
+}
+
+is_authorized_human(hop) if {
+    startswith(hop.principal, "user:")
+    hop.credential_status == "verified"
+    data.registry.deploy_rights[hop.principal][input.action.arguments.service][input.action.arguments.target]
+}
+
+# WF-02: production needs a resolved harness approval, which arrives as a fact.
 requires_approval contains {"rule": "WF-02"} if {
     input.action.arguments.target == "production"
+    not approved_for_this_proposal
+}
+
+approved_for_this_proposal if {
+    input.facts.harness_approval.status == "fresh"
+    input.facts.harness_approval.value.proposal_digest == input.context.proposal_digest
+    input.facts.harness_approval.value.policy_bundle_digest == input.context.policy_bundle.digest
 }
 ```
 
 Policy quality gates: `opa test` with coverage ≥ 95% of rules, Regal lint clean, and one killing mutation fixture per hard rule (`05-evaluation-plan.md` §4).
 
-### 4.6 Approval service (`FR-40`–`FR-46`)
+### 4.6 Approval service (`FR-40`–`FR-47`)
 
 ```mermaid
 stateDiagram-v2
   [*] --> requested
   requested --> pending: approvers notified
-  pending --> approved: eligible approver, before expiry, digest matches
+  pending --> approved: eligible approver, before expiry, proposal digest matches
   pending --> rejected: approver rejects
   pending --> expired: approval TTL elapsed
-  pending --> superseded: new envelope for same action_id
-  approved --> consumed: token issued and consumed by broker
-  approved --> expired: token TTL elapsed unused
+  pending --> superseded: new proposal digest for the same action_id
+  approved --> consumed: fresh evaluation ALLOWed, token issued and consumed
+  approved --> void: fresh evaluation DENY or ABSTAIN, or bundle changed
   rejected --> [*]
   expired --> [*]
   superseded --> [*]
+  void --> [*]
   consumed --> [*]
 ```
 
-- Eligibility: approver ∈ registry `approver_groups`, human principal from the identity provider, not the agent, not the proposing principal, not in the delegation chain (`FR-42`).
-- The approval payload shown and signed by the approver includes the digest; a token is issued only if the current envelope digest equals the approved digest (`FR-44`).
-- Minimal v1 surface: REST API + CLI + a plain web page; chat-ops integrations later.
+- Approvals bind to the **proposal digest** and the policy-bundle digest, never to the envelope digest, so an approval survives the fact re-fetch that must happen before anything executes (`ADR-0008`).
+- Eligibility: approver ∈ registry `approver_groups`, a human principal from the identity provider, not the agent, not the proposing principal, and not in the delegation chain of *any* session in the session tree (`FR-42`).
+- The approve request carries the proposal digest and the digest of the disclosure actually shown; both are recorded (`FR-43`).
+- On approval the service appends its record and hands off to the gateway. It never calls the token service. The gateway re-fetches facts, re-resolves, and issues a token only on a fresh `ALLOW` (`FR-47`); otherwise the approval becomes `void` and the approver is told why.
+- A bundle transition supersedes pending requests and re-evaluates them (`FR-84`).
+- Minimal v1 surface: REST API, CLI and a plain web page; chat-ops later.
 
 ### 4.7 Critic bank
 Common contract (`FR-55`, `FR-56`): `evaluate(envelope, facts, session_state) -> CriticResult{critic_id, version, result, counterexample?, duration_ms}`; each critic runs in a worker with CPU/memory limits and a hard timeout; results are Pydantic models validated against the decision-record schema.
 
-**SMT critic (`FR-51`)** — Z3 via `z3-solver`. Contracts are declared per action class in a small YAML DSL that compiles to QF_LIA/QF_BV assertions over typed argument and fact bindings (no quantifiers, no strings beyond enumerations). The critic asserts the negation of the contract and asks for satisfiability: `unsat` → `PASS`; `sat` → `FAIL` with the model as the counterexample (offending variables and values); `unknown`/timeout → `UNKNOWN`. Seed and resource limits are fixed for determinism.
+**SMT critic (`FR-51`)** — Z3 via `z3-solver`. Contracts are declared per action class in a small YAML DSL that compiles to QF_LIA/QF_BV assertions over typed argument and fact bindings (no quantifiers, no strings beyond enumerations; the harness pre-parses version strings into integer tuples so the solver never sees a string). The critic asserts the negation of the contract and asks for satisfiability: `unsat` → `PASS`; `sat` → `FAIL` with the model as the counterexample; solver `unknown` → `UNKNOWN`; wall-clock backstop exceeded → `TIMEOUT`. The **primary bound is Z3's deterministic `rlimit`**, not wall-clock, because a wall-clock bound makes results load-dependent and breaks replay under CI contention; the rlimit used is recorded, and the solver version is part of the critic version (`INV-09`).
 
-**Prolog critic (`FR-62`, prototype, soft)** — SWI-Prolog in a sandboxed container loading a harness-owned, signed rulebase at startup. The exposed interface is a single typed `query(goal_name, args)` with a depth/time limit. No `consult`, `assert`, `retract` or `replace` is reachable. Results are explanatory (which rules fired) and recorded as soft signals until the registry promotes a rule to hard after mutation testing.
+**Prolog critic (`FR-62`, optional, soft)** — SWI-Prolog in a sandboxed container loading a harness-owned, signed rulebase at startup. It is invoked **by the gateway only**; there is no agent-facing query interface in v1, because an agent-queryable prover is a policy-probing channel outside the repair budget. No `consult`, `assert`, `retract` or `replace` is reachable. Deferred unless an owner is named (`P2-04`).
 
-**Trajectory monitor (`FR-52`–`FR-54`)** — Temporal properties are written in a bounded LTLf subset (precedence, bounded response, absence, at-most-one-in-flight) and compiled to deterministic finite automata at bundle-build time. The monitor consumes events `proposed`, `allowed`, `executed(receipt)`, `approval_granted`, `denied`, keyed by session and by resource key (e.g. `(service, target)`). State is persisted transactionally; a missing state row yields `ABSTAIN` (`MONITOR_STATE_LOST`). The monitor cannot be set to `enforce` for an action class without a certification record naming the governed model (`FR-53`, `FR-54`).
+**Trajectory monitor (`FR-52`–`FR-54`)** — Temporal properties in a bounded LTLf subset (precedence, bounded response, absence) compiled to deterministic finite automata at bundle-build time (`OQ-09` decides build vs vendor, with the GPL constraint of MONA/Spot-based tooling in scope). Events: `proposed`, `approval_granted`, `allowed`, `executed`, `completed`, `denied`. **Keying:** resource-key properties span sessions and tenanted resources; session properties span the *session tree*, so a sub-agent cannot escape a precedence property by being a new session, and a parent's approval is visible to its children (`FR-06`). Transitions commit in **execution order at the broker**, not proposal order, so parallel and batched calls cannot reorder history (`FR-07`). State is persisted transactionally and versioned by the property-set digest; loss or version mismatch yields `ABSTAIN` (`MONITOR_STATE_LOST`), and a property-set change resets state within a bounded abstention window (`FR-84`). Mutual exclusion is deliberately **not** a monitor property: it is a broker lease (`FR-25`), so it holds before certification.
+
+**Effect critic (`FR-57`)** — Runs on receipt (synchronous) or completion (asynchronous). Compares the typed result and a freshly fetched state fact against the proposal: did the thing that was authorized actually happen, and only that? A mismatch appends an `effect_verification` record with `EFFECT_MISMATCH`, alerts, feeds the monitor, and per policy blocks the next action on that resource key. This is what makes the "output-side gap" claim in §3.1 of the specification true rather than aspirational.
 
 ### 4.8 Verdict resolver (`FR-05`)
 Pure function over `{pdp_outcomes, critic_results, fact_status, registry_entry, repair_iteration}` implementing `01-specification.md` §5.3. Table-driven tests enumerate all result combinations; property-based tests assert monotonicity (adding a failure never moves the verdict toward `ALLOW`).
 
 ### 4.9 Token service (`FR-20`–`FR-23`)
-- Token = `{decision_id, envelope_digest, policy_bundle_digest, tenant, issued_at, expires_at, nonce}`, signed with Ed25519 (multi-service) or HMAC-SHA256 (single deployment) using a KMS-held key.
+- Token payload is exactly `FR-20`: `{token_id (= nonce), decision_id, envelope_digest, proposal_digest, policy_bundle_digest, record_hash, tenant_id, mode, verdict, issued_at, expires_at, key_id, key_alg, shadow}`. Carrying `verdict` and `mode` is what stops a shadow token being cryptographically indistinguishable from an allow token (`ADR-0008`).
+- Signed with ECDSA P-256 by default (broadest KMS support), Ed25519 where the KMS offers it, HMAC-SHA256 only single-process (`ADR-0009`, `OQ-03`). Multiple key IDs are active during rotation; a revocation list covers both `token_id` and `key_id`.
 - `consume(token, digest)` is an atomic conditional insert into the nonce table; second consumption fails (`FR-22`).
-- Issued only after the evidence store acknowledges the record (`FR-23`).
+- Issued only after the evidence store acknowledges the evaluation record, and the issuance itself is appended as a `token_issued` record, so the evaluation record never contains the token it precedes (`FR-23`).
 
-### 4.10 Broker / PEP (`FR-21`, `FR-24`, `FR-63`)
-- Recomputes the digest of the envelope it receives; verifies token signature, expiry, digest equality, tenant; consumes the nonce; only then executes.
-- Executes via tool-specific connectors with least-privilege credentials scoped to the action class.
-- Types the result against the tool's output schema, truncates to a size bound, tags it `untrusted`, appends the receipt (`FR-24`), returns to the gateway.
-- Runs in shadow/advisory modes too: it executes without consulting the verdict but still requires a *shadow token* so the same code path is exercised (`FR-80`).
+### 4.10 Broker / PEP (`FR-21`, `FR-24`–`FR-27`, `FR-63`)
+Ordered checks, all before any side effect:
+1. Recompute the envelope digest of what it was handed.
+2. Verify the token: signature, key not revoked, expiry, tenant, `envelope_digest` equality, `verdict = ALLOW` when the class's **current** registry mode is `enforce`, `mode` equal to the class's current mode, `policy_bundle_digest` current within the grace window, `token_id` not on the revocation list.
+3. Verify its own clock source is healthy; refuse all tokens otherwise (`NFR-13`).
+4. Consume the nonce atomically; a second consumption of the same token from a different connection or with a different envelope is a replay and alerts, while an identical redelivery inside the TTL is recorded as `duplicate_delivery` and does not alert (`FR-22`).
+5. Acquire the per-`(tenant, resource_key)` lease atomically with consumption; refuse with `RESOURCE_BUSY` if held (`FR-25`). This is what actually enforces "at most one in flight", independently of monitor certification.
+6. Execute through the connector with least-privilege credentials. Synchronous connectors return a result; asynchronous connectors return a job handle, hold the lease, and completion arrives through the registered completion fact (`FR-26`).
+7. Type the result against the tool's output schema, bound its size, tag it untrusted, append the receipt (`FR-24`, `FR-63`).
+8. Hand the result and a fresh state fact to the effect critic (`FR-57`); a mismatch is recorded, alerted and fed to the monitor.
+
+In `shadow`/`advisory` the broker runs the identical path with a shadow token, so the code exercised in shadow is the code that will enforce. In `halted` no token exists, so nothing reaches the broker.
 
 ### 4.11 Evidence store (`FR-70`–`FR-74`, `SEC-10`)
 - PostgreSQL table `decision_records` with `record_id`, `tenant_id`, `seq`, `prev_record_hash`, `record_hash`, `payload jsonb` conforming to `schemas/decision-record.schema.json`; inserts are the only permitted write; triggers reject updates and deletes.
 - Hourly signed checkpoint `(tenant, last_seq, last_hash, signature)` written to object storage; verification tool recomputes the chain.
-- Replay tool reconstructs a verdict from a record, the referenced bundle and critic versions (`FR-71`).
+- The canonical envelope is retained content-addressed by `envelope_digest`, and historical bundles and critic packs are retained for the retention period; replay uses the record's own `timestamp` as "now", so fact ages and change windows evaluate deterministically (`FR-71`).
+- Human labels live in a separate label store keyed by record ID, outside the hash chain, so labelling never mutates evidence (`FR-74`).
+- Per-tenant `seq` and hash chaining serialize writes per tenant: a single-writer-per-tenant design with batched fsync, measured for contention in `P1-25` (`NFR-04`).
 - Export: JSONL + checkpoint for auditors (`FR-73`).
 - Privacy: principals stored as stable pseudonymous IDs with a per-tenant key; crypto-shredding supports erasure without breaking the chain (`NFR-16`).
 
@@ -268,17 +369,19 @@ Counterexamples are returned as the gateway's typed response. The governed runti
 
 | Concern | Decision | ADR |
 |---|---|---|
-| Implementation language | Python 3.12+, typed (mypy strict), Pydantic v2 models exported to JSON Schema 2020-12 | `ADR-0009` |
-| Policy engine | OPA with Rego v1; signed bundles; sidecar default, WASM in-process option | `ADR-0001`, `ADR-0009` |
-| Canonicalization / digest | RFC 8785 JCS + SHA-256 | `ADR-0008` |
-| Tokens | Ed25519 or HMAC via KMS; single-use nonce table | `ADR-0008` |
-| SMT | Z3 (`z3-solver`), QF_LIA/QF_BV, 200 ms timeout | `ADR-0002` |
-| Prolog prototype | SWI-Prolog, harness-owned signed rulebase, query-only MCP wrapper | `ADR-0002`, `FR-62` |
-| Temporal monitor | LTLf subset → DFA at build time; state in PostgreSQL | `ADR-0002`, `FR-52` |
-| Evidence store | PostgreSQL append-only + signed checkpoints to object storage | `ADR-0006` |
-| Interception | MCP gateway (primary) + hook adapter (secondary) | `ADR-0001` |
-| Constrained decoding | Not a harness responsibility; schema validation at the boundary only | `ADR-0003` |
-| Rollout | shadow → advisory → enforce per action class and per critic | `ADR-0010` |
+| Implementation language | Python 3.12+, typed (mypy strict), Pydantic v2 models exported to JSON Schema 2020-12 | `ADR-0019` |
+| Policy engine | OPA with Rego v1; signed bundles; sidecar (WASM in-process is post-v1 and unowned until then) | `ADR-0001`, `ADR-0019` |
+| Canonicalization / digests | RFC 8785 JCS + SHA-256; **proposal digest** (approvals) and **envelope digest** (tokens) | `ADR-0015` |
+| Tokens | ECDSA P-256 (default) / Ed25519 / HMAC via KMS; payload carries verdict and mode; single-use nonce; revocation list | `ADR-0015`, `ADR-0019` |
+| SMT | Z3, QF_LIA/QF_BV, deterministic `rlimit` primary bound + wall-clock backstop | `ADR-0002`, `ADR-0019` |
+| Prolog (optional) | SWI-Prolog, harness-owned signed rulebase, gateway-invoked only; deferred unless owned | `ADR-0019`, `FR-62` |
+| Temporal monitor | Bounded LTLf subset → DFA at build time, compiler built in-house; state in PostgreSQL, versioned by property-set digest | `ADR-0013`, `FR-52` |
+| Evidence store | PostgreSQL append-only + signed checkpoints; separate label store outside the chain | `ADR-0006` |
+| Interception | MCP gateway (primary, authenticated, server-derived session IDs) + optional hook adapter | `ADR-0001`, `SEC-12` |
+| Constrained decoding | Not a harness responsibility; argument-schema validation at the boundary only | `ADR-0003` |
+| Mutual exclusion | Broker-held lease per tenant and resource key | `ADR-0017` |
+| Effect verification | Effect critic against a fresh state fact on receipt or completion | `ADR-0018` |
+| Rollout | shadow → advisory → enforce, plus `halted`; modes never weaken fail-closed | `ADR-0016` |
 | Observability | OpenTelemetry (traces, metrics), structured JSON logs | — |
 | Packaging | `uv` with lockfile; distroless containers; CycloneDX SBOM; build provenance attestations; cosign-signed images and bundles | `06-delivery-and-governance.md` §4 |
 
@@ -342,7 +445,7 @@ docs/sdd/         this package
 |---|---|
 | Fact-provider latency dominates the policy-only budget | Parallel fetch, short-TTL cache, per-provider timeouts; measure in `P1-13`. |
 | SMT contract DSL scope creep | Restrict to QF_LIA/QF_BV enumerations; anything else is a new ADR. |
-| Monitor certification cost per model change | Automate corpus generation and the entropy test (`P3-03`, `P3-04`); budget it in the model-change runbook. |
+| Monitor certification cost per model change | Automate corpus generation and the entropy test (`P3-03`, `P3-04`); budget as recurring (`R-19`); the monitor ships advisory in v1.0 so certification is not on the release path. |
 | Approval fatigue in production | Track `nh_approvals_pending` and approval latency; tune `approvable` classes; never auto-approve. |
-| OPA sidecar vs in-process divergence | One bundle, two evaluators, same conformance suite in CI. |
+| OPA sidecar vs in-process divergence | Not applicable in v1: the WASM evaluator is post-v1, so no dual-evaluator suite is owned (`R2-D17`). |
 | Hook adapter bypass (framework calls tools directly) | Broker holds credentials; document the deployment requirement; bypass fixture in `P4-05`. |

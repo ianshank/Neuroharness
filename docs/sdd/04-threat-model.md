@@ -1,6 +1,6 @@
 # Neuroharness Threat Model
 
-**Status:** Draft v0.1 — needs security review · **Date:** 2026-09-18 · **Method:** assets → trust boundaries → adversaries → STRIDE per boundary → controls → residual risk · **Feeds:** `01-specification.md` §6.12 (`SEC-`), `05-evaluation-plan.md` §7
+**Status:** Draft v0.2 — needs security review · **Date:** 2026-09-18 · **Method:** assets → trust boundaries → adversaries → STRIDE per boundary → controls → residual risk · **Feeds:** `01-specification.md` §6.12 (`SEC-`), `05-evaluation-plan.md` §7
 
 ## 1. Scope
 The harness control plane, execution plane and audit plane described in `02-technical-plan.md` §2, the interfaces to the governed runtime, tool servers, fact providers, approvers and auditors. Out of scope: the internal safety of the LLM itself, the security of tool servers beyond the broker boundary, and the host platform (Kubernetes, cloud IAM), which are assumed to be operated to a baseline standard.
@@ -16,6 +16,7 @@ The harness control plane, execution plane and audit plane described in `02-tech
 | AS-6 | Fact-provider credentials and fact integrity | Facts are the only inputs policy trusts. |
 | AS-7 | Monitor state and token nonce store | Ordering guarantees and single-use guarantees. |
 | AS-8 | Tool results and record contents (may contain personal or confidential data) | Confidentiality and privacy obligations. |
+| AS-9 | Resource leases and the rollout-mode setting | Mutual exclusion and whether gates block at all. |
 
 ## 3. Trusted computing base (TCB) inventory
 Components whose compromise can produce an unwarranted `ALLOW` or hide one:
@@ -33,6 +34,10 @@ Components whose compromise can produce an unwarranted `ALLOW` or hide one:
 | Fact providers (CI, approvals, deploy state, clock, identity) | Integrity, freshness | **Often overlooked:** a spoofed `ci_result` is an allow. |
 | Identity provider / delegation resolver | Integrity | Source of actor and approver identity. |
 | Key management (KMS/HSM) | Confidentiality, availability | Rotation without downtime. |
+| Approval service | Integrity | Records approvals and supplies the `harness_approval` fact; **it cannot issue tokens** (`FR-47`), which keeps it out of the mint path but still authoritative over oversight. |
+| Lease store | Integrity, availability | Mutual exclusion (`FR-25`); a lost lease is a double execution. |
+| Override service | Integrity | Can halt or (with two principals) demote (`FR-48`). |
+| Effect critic and state fact source | Integrity | Detects executed-but-wrong effects (`FR-57`). |
 
 Explicitly **not** in the TCB: the LLM, the agent framework, the hook adapter, soft critics, dashboards, the approval UI's presentation layer (its API is).
 
@@ -86,17 +91,29 @@ Explicitly **not** in the TCB: the LLM, the agent framework, the hook adapter, s
 | T-19 | Information disclosure | B4, B10 | Cross-tenant leakage of records or facts | Confidentiality | `NFR-15`: tenant-scoped keys, tables, bundles | integration test |
 | T-20 | Spoofing | B5, B9 | Signing-key compromise | Forged tokens or bundles | `NFR-17`: KMS/HSM, rotation, short token TTL, key-ID in tokens, revocation list, alerting on unknown key IDs | residual: window until rotation |
 
+| T-21 | Spoofing/Tampering | B2, B6 | **Fact laundering:** the agent uses a permitted tool to write to the system an evidence provider reads (approve its own change ticket, trigger a trivial CI run), then the provider returns an authentic fresh fact | Self-authorized action with every control green | `SEC-11`: evidence providers' backing systems are not writable by the tenant's registered tools, or facts carry `asserted_by` and rules reject evidence from the delegation chain; effect verification catches divergence after the fact | `MUT-23`, `A-34`; residual: a provider compromised upstream still produces authentic facts (`R-04`) |
+| T-22 | Spoofing | B1, B8 | Forged session identity or delegation chain: a fresh session per proposal defeats per-session limits and monitor state; an unverified chain hop chooses which human "holds the right" and who is excluded from approving | Oversight and ordering defeated | `SEC-12` server-derived session IDs from an authenticated host; `SEC-13` verifiable delegation credentials per hop with recorded digests; `FR-06` session tree; `FR-42` eligibility across the tree | `MUT-25`, `MUT-33`, `A-36`, `A-40` |
+| T-23 | Elevation | B9 | Operational override abused: a single principal demotes a class to advisory, which executes everything, bypassing the two-person rule that governs policy changes | Total bypass, cheaper than changing policy | `FR-48` two principals, no affected-chain principals, reason, ticket, ≤ 1 h auto-expiry; `FR-49` halt is the incident lever instead; `SEC-14` | `MUT-26`, `A-39` |
+| T-24 | Tampering | B5 | Shadow token used against a class that has since been promoted to enforce, or a token replayed after its bundle was superseded | Execution under stale authority | `FR-20` token carries verdict and mode; `FR-21` broker compares against the class's current mode and bundle currency and checks the revocation list | `MUT-20`, `MUT-36`, `A-31` |
+| T-25 | Denial of service / Tampering | B1 | Retry storms and duplicate deliveries indistinguishable from replay, drowning the replay alert | The one alert that matters is lost | `FR-22` duplicate-delivery classification; `FR-27` idempotency and `RETRY_UNRESOLVED` | `MUT-27`, `A-32` |
+| T-26 | Tampering | B6 | Executed-but-wrong effect: the call is authorized and the receipt says success, but the effect differs (wrong artifact, wrong target resolution) | Real-world harm despite ALLOW | `FR-57` effect critic against a fresh state fact; `T-17` controls on argument resolution | `MUT-32`, `A-38` |
+
 ## 7. Agent-specific abuse cases (for red-team fixtures)
 1. **Claim smuggling**: put fact-shaped keys in arguments or nested objects hoping a rule reads them (T-01, T-02).
-2. **Two-step split**: decompose a forbidden action into allowed sub-actions whose sequence is unsafe (motivates the monitor, `WF-06`).
+2. **Two-step split**: decompose a forbidden action into allowed sub-actions whose sequence is unsafe (motivates the monitor, `WF-06a`).
 3. **Approval piggybacking**: obtain approval for a benign envelope, then repair it into a harmful one (T-06).
 4. **Environment aliasing**: `target: "prod-eu"` where the allowlist checks `production` (T-17; enumerations, not strings).
 5. **Result-driven escalation**: a tool result instructs the model to call a privileged tool (T-12).
 6. **Budget exhaustion as signal**: use repairs to map the contract (T-18).
-7. **Race**: two sessions deploy the same service simultaneously (T-17, `NFR-14`).
+7. **Race**: two sessions deploy the same service simultaneously (T-17, `NFR-14`, now blocked by the broker lease `FR-25` rather than by an uncertified monitor).
+8. **Evidence manufacturing**: use a low-risk permitted tool to satisfy an evidence rule (T-21).
+9. **Session laundering**: open a new session per proposal, or spawn a sub-agent, to reset per-session limits or to become an eligible approver (T-22).
+10. **Override abuse**: request a demotion during a manufactured incident to get a window of unguarded execution (T-23).
+11. **Approval staleness**: obtain approval, wait for the evidence to expire, then execute (closed by `FR-47`).
 
 ## 8. Assumptions and residual risks
 - Host platform, identity provider and KMS are operated to a baseline standard.
 - Fact providers are as trustworthy as the systems they front; the harness detects staleness and absence, not sophisticated forgery by a compromised provider.
 - The harness reduces the attack surface to encoded invariants; unencoded harms remain possible and are stated in `01-specification.md` §3.3.
 - Residual risks are tracked as `R-` items in `06-delivery-and-governance.md` §9 with owners.
+- **Known residuals after round two:** a compromised fact provider still produces authentic facts (detection is post-hoc via `FR-57` and state audits); the trajectory monitor ships advisory in v1.0, so general ordering invariants beyond precedence-at-token-issue and the broker lease are not enforced until certification; delegation credentials depend on an identity layer the project does not own, and where the environment cannot issue them `WF-03` degrades to a trusted string and must be marked as such per deployment.

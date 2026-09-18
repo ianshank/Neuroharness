@@ -1,6 +1,6 @@
 # ADR-0008: Digest-bound single-use decision tokens and approval binding
 
-**Status:** Proposed · **Date:** 2026-09-18 · **Deciders:** Tech lead, Security lead · **Origin:** peer review M2, M9
+**Status:** Superseded by [ADR-0015](ADR-0015-*.md) — two digests and post-approval re-evaluation · **Date:** 2026-09-18 · **Deciders:** Tech lead, Security lead · **Origin:** peer review M2, M9
 
 ## Context
 The research evaluated an envelope and then executed "via a broker" with nothing binding the executed call to the evaluated one. This leaves time-of-check/time-of-use gaps, argument substitution, replay of old decisions, and approvals that silently apply to modified actions.

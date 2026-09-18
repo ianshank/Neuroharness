@@ -8,14 +8,15 @@ Neuroharness sits between an agent and the tools it wants to call. The agent pro
 
 ## Status
 
-**Phase: Specification (Spec-Driven Development).** No runtime code exists yet. This repository currently holds the research input, an independent peer review of that input, and the full SDD package (constitution, specification, technical plan, work breakdown, threat model, evaluation plan, delivery/governance model, ADRs, and JSON Schemas) that implementation will be driven from.
+**Phase: Specification (Spec-Driven Development), revision 2.** No runtime code exists yet. This repository holds the research input, two rounds of peer review, and the SDD package that implementation will be driven from. Round two put the specification through four adversarial reviews; the resulting v0.2 changed how approvals bind, how rollout modes interact with failure, how mutual exclusion is enforced, and what the project claims to verify.
 
 ## Document map
 
 | Path | What it is | Read it when |
 |---|---|---|
 | `docs/research/2026-09-18-neurosymbolic-wrapper-research-synthesis.md` | The research synthesis that motivated the project (kept verbatim for provenance). | You want the evidence base and the model-perspective analysis. |
-| `docs/review/2026-09-18-peer-review-research-synthesis.md` | Independent peer review of the synthesis: verdict, major/minor issues, citation audit, requested changes. | You want to know what the research got right, what it left out, and why the spec differs from it. |
+| `docs/review/2026-09-18-peer-review-research-synthesis.md` | Round-one peer review of the synthesis: verdict, major/minor issues, citation audit. | You want to know what the research got right and what it left out. |
+| `docs/review/2026-09-18-round-2-deep-dive-review.md` | Round-two review of the specification itself: 71 findings from four adversarial lenses, plus an audit that corrects round one. | You want to know how the design was attacked and what broke. |
 | `docs/sdd/README.md` | How Spec-Driven Development works in this repo and the status of each SDD document. | You are about to change anything under `docs/sdd/`. |
 | `docs/sdd/00-constitution.md` | Non-negotiable principles every design and code change must satisfy. | Always. Start here. |
 | `docs/sdd/01-specification.md` | Functional/non-functional requirements, invariant registry, verdict semantics, acceptance scenarios. | You are implementing or testing a requirement. |
@@ -29,7 +30,7 @@ Neuroharness sits between an agent and the tools it wants to call. The agent pro
 
 ## The one-paragraph design
 
-An **action envelope** (agent-authored proposal + harness-authored context) is canonicalized and hashed. A **policy decision point** (OPA/Rego) evaluates allowlists, identity/delegation, environment, approval and evidence rules against **authoritative facts** the harness fetched itself. A **critic bank** of narrow, versioned verifiers (Z3/SMT contracts, a read-only Prolog rulebase, a finite-state trajectory monitor) checks only invariants that are formalizable for that action class. Verdicts compose by a fixed **resolution order** (`DENY` › `REPAIR` while budget remains › `ABSTAIN` › `REQUIRES_APPROVAL` › `ALLOW`). An `ALLOW` yields a **single-use decision token** bound to the envelope digest; the **tool broker** executes nothing without a valid token. Every step appends to a **hash-chained decision record**. Anything the harness cannot evaluate (solver `unknown`, timeout, stale fact, policy engine unavailable, audit write failure) is **fail-closed**: no token, no execution.
+An **action envelope** (agent-authored proposal + harness-authored context) is canonicalized and hashed twice: a **proposal digest** identifying what is asked and by whom, and an **envelope digest** identifying one evaluation. A **policy decision point** (OPA/Rego) evaluates allowlists, identity and delegation, environment, approval and evidence rules against **facts the harness fetched itself** from registered providers, never against agent claims and never against evidence the agent could have manufactured. A **critic bank** of narrow, versioned verifiers checks only invariants registered as formalizable for that action class. Verdicts resolve in a fixed order along the safety order `ALLOW < REQUIRES_APPROVAL < REPAIR < ABSTAIN < DENY`. Human approval binds to the **proposal** digest and triggers a **fresh evaluation** before anything executes, so oversight never underwrites stale evidence. An `ALLOW` yields a **single-use token** carrying the verdict and rollout mode; the **broker** holds the only credentials, refuses to execute without a matching token, and takes a **lease** on the resource so two sessions cannot act at once. After execution an **effect critic** checks that what happened is what was authorized. Every step appends to a **hash-chained record**. Anything the harness cannot evaluate is **fail-closed in every rollout mode**: no token, no execution.
 
 ## Contributing
 

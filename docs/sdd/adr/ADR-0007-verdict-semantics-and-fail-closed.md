@@ -1,6 +1,6 @@
 # ADR-0007: Verdict semantics, resolution order and fail-closed mapping
 
-**Status:** Proposed · **Date:** 2026-09-18 · **Deciders:** Tech lead, Security lead · **Origin:** peer review M1, M4
+**Status:** Superseded by [ADR-0014](ADR-0014-*.md) — verdict resolution order rewritten: safety order, infrastructure step, mode normalization, approvability · **Date:** 2026-09-18 · **Deciders:** Tech lead, Security lead · **Origin:** peer review M1, M4
 
 ## Context
 The research listed five outcomes in one place and six in another, treated the solver result `UNKNOWN` as a decision, left `REPAIR` unbounded, and did not say how results from the policy engine and several critics compose. Ambiguity here becomes an implicit-allow defect.

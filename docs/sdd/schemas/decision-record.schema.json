@@ -2,158 +2,271 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://neuroharness.dev/schemas/v1/decision-record.schema.json",
   "title": "Neuroharness Decision Record",
-  "description": "Append-only, per-tenant hash-chained record. One `evaluation` record per evaluation; `approval`, `execution_receipt`, `override` and `checkpoint` records are linked by `decision_id`/`action_id`. Requirements: FR-70 to FR-74, SEC-10, INV-05, INV-09.",
+  "description": "Append-only, per-tenant hash-chained record. One `evaluation` record per evaluation; `token_issued`, `approval`, `execution_receipt`, `completion`, `effect_verification`, `override` and `checkpoint` records are linked by decision_id/action_id. The token is NOT part of the evaluation record: the evaluation record must be durable before a token exists (INV-05, FR-23). Requirements: FR-70 to FR-74, SEC-10, INV-09.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "record_id", "tenant_id", "seq", "prev_record_hash", "record_hash", "kind", "timestamp", "trace_id"],
   "properties": {
-    "schema_version": { "const": "1.0" },
+    "schema_version": { "const": "1.1" },
     "record_id": { "type": "string", "format": "uuid" },
     "tenant_id": { "type": "string", "maxLength": 64 },
     "seq": { "type": "integer", "minimum": 0 },
     "prev_record_hash": {
       "description": "Hash of the previous record in this tenant's chain; null only for the genesis record.",
-      "type": ["string", "null"],
-      "pattern": "^sha256:[0-9a-f]{64}$"
+      "anyOf": [{ "$ref": "#/$defs/Digest" }, { "type": "null" }]
     },
     "record_hash": {
       "description": "SHA-256 over the JCS canonical form of this record with `record_hash` omitted.",
-      "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
+      "$ref": "#/$defs/Digest"
     },
-    "kind": { "type": "string", "enum": ["evaluation", "approval", "execution_receipt", "override", "checkpoint"] },
-    "timestamp": { "type": "string", "format": "date-time" },
+    "kind": {
+      "type": "string",
+      "enum": ["evaluation", "token_issued", "approval", "execution_receipt", "completion", "effect_verification", "override", "checkpoint"]
+    },
+    "timestamp": {
+      "description": "Trusted-clock time of the event. Replay uses the evaluation record's timestamp as `now` (FR-71).",
+      "type": "string",
+      "format": "date-time"
+    },
     "trace_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
     "decision_id": { "type": "string", "format": "uuid" },
     "action_id": { "type": "string", "format": "uuid" },
     "evaluation": { "$ref": "#/$defs/Evaluation" },
+    "token_issued": { "$ref": "#/$defs/DecisionToken" },
     "approval": { "$ref": "#/$defs/Approval" },
     "execution_receipt": { "$ref": "#/$defs/ExecutionReceipt" },
+    "completion": { "$ref": "#/$defs/Completion" },
+    "effect_verification": { "$ref": "#/$defs/EffectVerification" },
     "override": { "$ref": "#/$defs/Override" },
     "checkpoint": { "$ref": "#/$defs/Checkpoint" }
   },
   "allOf": [
-    { "if": { "properties": { "kind": { "const": "evaluation" } } }, "then": { "required": ["decision_id", "action_id", "evaluation"] } },
-    { "if": { "properties": { "kind": { "const": "approval" } } }, "then": { "required": ["decision_id", "action_id", "approval"] } },
-    { "if": { "properties": { "kind": { "const": "execution_receipt" } } }, "then": { "required": ["decision_id", "action_id", "execution_receipt"] } },
-    { "if": { "properties": { "kind": { "const": "override" } } }, "then": { "required": ["override"] } },
-    { "if": { "properties": { "kind": { "const": "checkpoint" } } }, "then": { "required": ["checkpoint"] } }
+    { "if": { "properties": { "kind": { "const": "evaluation" } }, "required": ["kind"] }, "then": { "required": ["decision_id", "action_id", "evaluation"] } },
+    { "if": { "properties": { "kind": { "const": "token_issued" } }, "required": ["kind"] }, "then": { "required": ["decision_id", "action_id", "token_issued"] } },
+    { "if": { "properties": { "kind": { "const": "approval" } }, "required": ["kind"] }, "then": { "required": ["decision_id", "action_id", "approval"] } },
+    { "if": { "properties": { "kind": { "const": "execution_receipt" } }, "required": ["kind"] }, "then": { "required": ["decision_id", "action_id", "execution_receipt"] } },
+    { "if": { "properties": { "kind": { "const": "completion" } }, "required": ["kind"] }, "then": { "required": ["decision_id", "action_id", "completion"] } },
+    { "if": { "properties": { "kind": { "const": "effect_verification" } }, "required": ["kind"] }, "then": { "required": ["decision_id", "action_id", "effect_verification"] } },
+    { "if": { "properties": { "kind": { "const": "override" } }, "required": ["kind"] }, "then": { "required": ["override"] } },
+    { "if": { "properties": { "kind": { "const": "checkpoint" } }, "required": ["kind"] }, "then": { "required": ["checkpoint"] } }
   ],
   "$defs": {
+    "Digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "Principal": { "type": "string", "pattern": "^(user|service|workflow|agent|system):[A-Za-z0-9._-]{1,96}$" },
     "Verdict": { "type": "string", "enum": ["ALLOW", "DENY", "REQUIRES_APPROVAL", "ABSTAIN", "REPAIR"] },
     "VerifierResult": { "type": "string", "enum": ["PASS", "FAIL", "UNKNOWN", "TIMEOUT", "ERROR", "NOT_APPLICABLE"] },
-    "Mode": { "type": "string", "enum": ["shadow", "advisory", "enforce"] },
-    "ReasonCode": {
-      "description": "Machine-readable reason, e.g. RULE_FAILED:WF-01, FACT_STALE:ci_result, SOLVER_TIMEOUT:smt.version-contract. Never free text.",
-      "type": "string",
-      "pattern": "^[A-Z][A-Z0-9_]*(:[A-Za-z0-9._-]+)?$",
-      "maxLength": 160
+    "Mode": { "type": "string", "enum": ["shadow", "advisory", "enforce", "halted"] },
+    "CriticId": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_-]+)*$", "maxLength": 64 },
+    "RuleId": { "type": "string", "pattern": "^[A-Z]{2,6}-[0-9]{2,4}[a-z]?$" },
+    "PropertyId": { "type": "string", "pattern": "^[A-Z]{2,6}-[0-9]{2,4}[a-z]?(\\.[a-z0-9_]+)?$", "maxLength": 64 },
+    "FactName": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 64 },
+    "ResourceKey": { "type": "string", "pattern": "^[a-z][a-z0-9_]*:[A-Za-z0-9._-]+(/[a-z][a-z0-9_]*:[A-Za-z0-9._-]+)*$", "maxLength": 256 },
+    "Scalar": {
+      "anyOf": [
+        { "type": "string", "maxLength": 128 },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "null" }
+      ]
     },
-    "Digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "ReasonCode": {
+      "description": "Closed catalogue (spec section 5.6). The suffix is validated by the gateway against registry rule, critic, fact, property and resource identifiers (SEC-07). Never free text.",
+      "type": "string",
+      "maxLength": 320,
+      "anyOf": [
+        { "enum": [
+          "POLICY_ENGINE_UNAVAILABLE", "BUNDLE_INTEGRITY_FAILED", "REGISTRY_INTEGRITY_FAILED",
+          "EVIDENCE_UNAVAILABLE", "CLOCK_UNAVAILABLE", "MONITOR_STATE_LOST", "HARNESS_UNHEALTHY",
+          "SCHEMA_INVALID", "ACTION_CLASS_UNREGISTERED", "CLASS_HALTED",
+          "REPAIR_BUDGET_EXHAUSTED", "REPAIR_RATE_LIMITED", "APPROVER_NOT_ELIGIBLE"
+        ] },
+        { "pattern": "^RULE_FAILED:[A-Z]{2,6}-[0-9]{2,4}[a-z]?$" },
+        { "pattern": "^(FACT_MISSING|FACT_STALE|FACT_PROVIDER_ERROR):[a-z][a-z0-9_]*$" },
+        { "pattern": "^(SOLVER_UNKNOWN|SOLVER_TIMEOUT|CRITIC_ERROR):[a-z][a-z0-9_]*(\\.[a-z0-9_-]+)*$" },
+        { "pattern": "^(APPROVAL_REQUIRED|APPROVAL_NOT_PERMITTED):[A-Z]{2,6}-[0-9]{2,4}[a-z]?$" },
+        { "pattern": "^APPROVAL_VOID:[0-9a-f-]{36}$" },
+        { "pattern": "^MONITOR_VIOLATION:[A-Z]{2,6}-[0-9]{2,4}[a-z]?(\\.[a-z0-9_]+)?$" },
+        { "pattern": "^(RESOURCE_BUSY|EFFECT_MISMATCH):[a-z][a-z0-9_]*:[A-Za-z0-9._-]+(/[a-z][a-z0-9_]*:[A-Za-z0-9._-]+)*$" },
+        { "pattern": "^RETRY_UNRESOLVED:[0-9a-f-]{36}$" },
+        { "pattern": "^TOKEN_INVALID:(expired|consumed|digest_mismatch|verdict_mismatch|mode_mismatch|bundle_stale|revoked|signature)$" },
+        { "pattern": "^BATCH_DEPENDENCY_DENIED:[0-9]{1,2}$" }
+      ]
+    },
     "VersionedArtifact": {
       "type": "object",
       "additionalProperties": false,
       "required": ["version", "digest"],
       "properties": { "version": { "type": "string", "maxLength": 64 }, "digest": { "$ref": "#/$defs/Digest" } }
     },
+    "ActionClassRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "intent"],
+      "properties": {
+        "tool": { "type": "string", "maxLength": 128 },
+        "intent": { "type": "string", "maxLength": 64 },
+        "effect_class": { "type": "string", "enum": ["none", "read", "write", "destructive"] },
+        "resource_key": { "$ref": "#/$defs/ResourceKey" }
+      }
+    },
     "Evaluation": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "envelope_digest", "repair_iteration", "mode", "policy_bundle", "registry", "pdp_outcomes",
-        "critic_results", "facts_used", "claims_recorded", "verdict", "reason_codes", "latency_ms"
+        "proposal_digest", "envelope_digest", "envelope_ref", "action_class", "session_id", "session_root_id",
+        "repair_iteration", "mode", "policy_bundle", "registry", "pdp_outcomes", "critic_results",
+        "facts_used", "claims_recorded", "verdict", "reason_codes", "latency_ms", "end_to_end_ms"
       ],
       "properties": {
-        "envelope_digest": { "$ref": "#/$defs/Digest" },
+        "proposal_digest": {
+          "description": "Identity of what is being asked, by whom, under which bundle. Approvals bind to this (FR-04, FR-40).",
+          "$ref": "#/$defs/Digest"
+        },
+        "envelope_digest": {
+          "description": "Identity of this evaluation. Tokens bind to this (FR-04, FR-20). For SCHEMA_INVALID this is the digest of the raw request bytes (FR-02).",
+          "$ref": "#/$defs/Digest"
+        },
         "envelope_ref": {
-          "description": "Storage reference to the full envelope (may be embedded by deployments that permit it).",
+          "description": "Storage reference to the retained canonical envelope, content-addressed by envelope_digest; required for replay (FR-70, FR-71).",
           "type": "string",
           "maxLength": 256
         },
+        "action_class": { "$ref": "#/$defs/ActionClassRef" },
+        "session_id": { "type": "string", "maxLength": 128 },
+        "session_root_id": { "type": "string", "maxLength": 128 },
+        "model_identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model_id": { "type": "string", "maxLength": 128 },
+            "model_version": { "type": "string", "maxLength": 64 },
+            "prompt_family_digest": { "$ref": "#/$defs/Digest" }
+          }
+        },
         "repair_iteration": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "prior_decision_id": { "type": "string", "format": "uuid" },
+        "batch": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "batch_id": { "type": "string", "format": "uuid" },
+            "batch_index": { "type": "integer", "minimum": 0 },
+            "batch_policy": { "type": "string", "enum": ["independent", "all_or_nothing"] }
+          }
+        },
         "mode": { "$ref": "#/$defs/Mode" },
         "policy_bundle": { "$ref": "#/$defs/VersionedArtifact" },
         "registry": { "$ref": "#/$defs/VersionedArtifact" },
-        "pdp_outcomes": { "type": "array", "items": { "$ref": "#/$defs/RuleOutcome" } },
-        "critic_results": { "type": "array", "items": { "$ref": "#/$defs/CriticResult" } },
-        "facts_used": { "type": "array", "items": { "$ref": "#/$defs/FactRef" } },
+        "pdp_outcomes": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/RuleOutcome" } },
+        "critic_results": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/CriticResult" } },
+        "facts_used": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/FactRef" } },
         "claims_recorded": {
           "description": "Agent claims as received; recorded for audit, never evaluated (FR-12).",
           "type": "array",
+          "maxItems": 32,
           "items": {
             "type": "object",
             "additionalProperties": false,
             "required": ["name", "value"],
-            "properties": { "name": { "type": "string" }, "value": { "type": ["string", "number", "boolean", "null"] } }
+            "properties": { "name": { "$ref": "#/$defs/FactName" }, "value": { "$ref": "#/$defs/Scalar" } }
           }
         },
         "verdict": { "$ref": "#/$defs/Verdict" },
-        "reason_codes": { "type": "array", "items": { "$ref": "#/$defs/ReasonCode" } },
-        "counterexamples": { "type": "array", "items": { "$ref": "#/$defs/Counterexample" } },
+        "reason_codes": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/ReasonCode" } },
+        "counterexamples": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/Counterexample" } },
+        "approval_request_id": { "type": "string", "format": "uuid" },
+        "monitor_state_ref": { "type": "string", "maxLength": 256 },
         "latency_ms": {
+          "description": "Per-stage latencies keyed by stage name (build, facts, pdp, critic:<id>, resolve, record, token).",
           "type": "object",
           "additionalProperties": { "type": "number", "minimum": 0 },
-          "description": "Per-stage latencies keyed by stage name (build, facts, pdp, critic:<id>, resolve, record, token)."
+          "propertyNames": { "maxLength": 80 }
         },
-        "decision_token": { "$ref": "#/$defs/DecisionToken" },
-        "approval_request_id": { "type": "string", "format": "uuid" },
-        "monitor_state_ref": { "type": "string", "maxLength": 256 }
+        "end_to_end_ms": { "type": "number", "minimum": 0 }
       }
     },
     "RuleOutcome": {
+      "description": "One PDP rule result. Mapping to verifier results is in spec section 5.1: deny -> hard FAIL, abstain -> hard UNKNOWN, requires_approval -> resolution step 6.",
       "type": "object",
       "additionalProperties": false,
       "required": ["rule_id", "outcome"],
       "properties": {
-        "rule_id": { "type": "string", "pattern": "^[A-Z]{2,6}-[0-9]{2,4}$" },
+        "rule_id": { "$ref": "#/$defs/RuleId" },
         "outcome": { "type": "string", "enum": ["pass", "deny", "abstain", "requires_approval", "not_applicable"] },
         "repairable": { "type": "boolean" },
-        "reason_code": { "$ref": "#/$defs/ReasonCode" }
+        "reason_code": { "$ref": "#/$defs/ReasonCode" },
+        "counterexample": { "$ref": "#/$defs/Counterexample" }
       }
     },
     "CriticResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["critic_id", "version", "kind", "hard", "result", "duration_ms"],
+      "required": ["critic_id", "version", "kind", "hard", "effective_mode", "result", "duration_ms"],
       "properties": {
-        "critic_id": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]*$", "maxLength": 64 },
-        "version": { "type": "string", "maxLength": 64 },
-        "kind": { "type": "string", "enum": ["rego", "smt", "prolog", "monitor", "llm_soft", "other"] },
+        "critic_id": { "$ref": "#/$defs/CriticId" },
+        "version": {
+          "description": "Includes the solver/runtime version where applicable (FR-51, INV-09).",
+          "type": "string",
+          "maxLength": 96
+        },
+        "kind": { "type": "string", "enum": ["smt", "prolog", "monitor", "effect", "llm_soft", "other"] },
         "hard": { "type": "boolean" },
-        "mode": { "$ref": "#/$defs/Mode" },
+        "effective_mode": {
+          "description": "Class mode further restricted by per-critic mode. A hard critic in shadow/advisory is treated as soft for resolution (spec section 5.3 step 0).",
+          "$ref": "#/$defs/Mode"
+        },
         "result": { "$ref": "#/$defs/VerifierResult" },
+        "would_be_verdict": {
+          "description": "For a hard critic running in shadow/advisory: the verdict it would have produced in enforce (used for shadow-kill evaluation).",
+          "$ref": "#/$defs/Verdict"
+        },
         "repairable": { "type": "boolean" },
         "counterexample": { "$ref": "#/$defs/Counterexample" },
         "solver_status": { "type": "string", "enum": ["sat", "unsat", "unknown"] },
+        "solver_rlimit_used": { "type": "integer", "minimum": 0 },
+        "score": {
+          "description": "Soft critics only; advisory confidence for calibration reporting. Never an allow signal (INV-01).",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
         "duration_ms": { "type": "number", "minimum": 0 }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "hard": { "const": true } }, "required": ["hard"] },
+          "then": { "not": { "required": ["score"] } }
+        }
+      ]
     },
     "Counterexample": {
-      "description": "Typed, non-instructional explanation of a failure (FR-56). No free-text fields.",
+      "description": "Typed, non-instructional explanation of a failure (FR-56, SEC-07). No free-text fields; identifiers are registry-validated.",
       "type": "object",
       "additionalProperties": false,
       "required": ["property_id", "fields"],
       "properties": {
-        "property_id": { "type": "string", "maxLength": 96 },
+        "property_id": { "$ref": "#/$defs/PropertyId" },
         "fields": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 16,
           "items": {
             "type": "object",
             "additionalProperties": false,
             "required": ["path"],
             "properties": {
-              "path": { "type": "string", "maxLength": 256 },
-              "value": {},
+              "path": { "type": "string", "pattern": "^(/[A-Za-z0-9_.~-]+)+$", "maxLength": 128 },
+              "value": { "$ref": "#/$defs/Scalar" },
+              "value_digest": { "$ref": "#/$defs/Digest" },
               "expected": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                  "enum": { "type": "array" },
+                  "enum": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/Scalar" } },
                   "min": { "type": "number" },
                   "max": { "type": "number" },
                   "relation": { "type": "string", "enum": ["eq", "ne", "lt", "le", "gt", "ge", "in", "not_in", "precedes", "follows"] },
-                  "reference_path": { "type": "string", "maxLength": 256 }
+                  "reference_path": { "type": "string", "pattern": "^(/[A-Za-z0-9_.~-]+)+$", "maxLength": 128 }
                 }
               }
             }
@@ -167,9 +280,10 @@
       "additionalProperties": false,
       "required": ["name", "status"],
       "properties": {
-        "name": { "type": "string" },
+        "name": { "$ref": "#/$defs/FactName" },
         "digest": { "$ref": "#/$defs/Digest" },
-        "source": { "type": "string" },
+        "source": { "type": "string", "maxLength": 128 },
+        "asserted_by": { "$ref": "#/$defs/Principal" },
         "fetched_at": { "type": "string", "format": "date-time" },
         "age_seconds": { "type": "number", "minimum": 0 },
         "max_age_seconds": { "type": "number", "minimum": 0 },
@@ -177,30 +291,38 @@
       }
     },
     "DecisionToken": {
-      "description": "Token metadata as recorded; the signature itself is not stored in the record.",
+      "description": "Recorded as its own `token_issued` record after the evaluation record is durable (FR-23). The signature itself is not stored.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["token_id", "decision_id", "envelope_digest", "policy_bundle_digest", "tenant_id", "issued_at", "expires_at", "key_id"],
+      "required": ["token_id", "decision_id", "envelope_digest", "proposal_digest", "policy_bundle_digest", "tenant_id", "mode", "verdict", "issued_at", "expires_at", "key_id", "key_alg", "shadow"],
       "properties": {
-        "token_id": { "type": "string", "format": "uuid" },
+        "token_id": { "description": "Also the single-use nonce (FR-22).", "type": "string", "format": "uuid" },
         "decision_id": { "type": "string", "format": "uuid" },
         "envelope_digest": { "$ref": "#/$defs/Digest" },
+        "proposal_digest": { "$ref": "#/$defs/Digest" },
         "policy_bundle_digest": { "$ref": "#/$defs/Digest" },
-        "tenant_id": { "type": "string" },
+        "record_hash": { "description": "Hash of the evaluation record this token was issued against.", "$ref": "#/$defs/Digest" },
+        "tenant_id": { "type": "string", "maxLength": 64 },
+        "mode": { "$ref": "#/$defs/Mode" },
+        "verdict": { "$ref": "#/$defs/Verdict" },
         "issued_at": { "type": "string", "format": "date-time" },
         "expires_at": { "type": "string", "format": "date-time" },
         "key_id": { "type": "string", "maxLength": 64 },
-        "shadow": { "type": "boolean", "description": "True for tokens issued in shadow/advisory modes (FR-80)." }
+        "key_alg": { "type": "string", "enum": ["ecdsa-p256", "ed25519", "hmac-sha256"] },
+        "shadow": { "description": "True for tokens issued in shadow/advisory mode; refused by the broker when the class is enforce (FR-21).", "type": "boolean" }
       }
     },
     "Approval": {
+      "description": "Bound to the PROPOSAL digest and the bundle digest (FR-40). Resolution triggers a fresh evaluation; the approval service never issues tokens (FR-47).",
       "type": "object",
       "additionalProperties": false,
-      "required": ["approval_request_id", "envelope_digest", "state", "requested_at", "expires_at"],
+      "required": ["approval_request_id", "proposal_digest", "policy_bundle_digest", "state", "requested_at", "expires_at"],
       "properties": {
         "approval_request_id": { "type": "string", "format": "uuid" },
-        "envelope_digest": { "$ref": "#/$defs/Digest" },
-        "state": { "type": "string", "enum": ["requested", "pending", "approved", "rejected", "expired", "superseded", "consumed"] },
+        "proposal_digest": { "$ref": "#/$defs/Digest" },
+        "policy_bundle_digest": { "$ref": "#/$defs/Digest" },
+        "requesting_envelope_digest": { "description": "Envelope that raised the request; informational.", "$ref": "#/$defs/Digest" },
+        "state": { "type": "string", "enum": ["requested", "pending", "approved", "rejected", "expired", "superseded", "void", "consumed"] },
         "requested_at": { "type": "string", "format": "date-time" },
         "expires_at": { "type": "string", "format": "date-time" },
         "decided_at": { "type": "string", "format": "date-time" },
@@ -209,31 +331,49 @@
           "additionalProperties": false,
           "required": ["principal", "method"],
           "properties": {
-            "principal": { "type": "string", "maxLength": 128 },
+            "principal": { "$ref": "#/$defs/Principal" },
             "method": { "type": "string", "enum": ["ui", "api", "cli"] },
             "group": { "type": "string", "maxLength": 64 }
           }
         },
-        "disclosure_digest": {
-          "description": "Digest of the exact disclosure shown to the approver (FR-43).",
-          "$ref": "#/$defs/Digest"
-        },
+        "disclosure_digest": { "description": "Digest of the exact disclosure shown to and submitted by the approver (FR-43).", "$ref": "#/$defs/Digest" },
+        "resolved_decision_id": { "description": "The fresh evaluation triggered by this approval (FR-47).", "type": "string", "format": "uuid" },
         "superseded_by_decision_id": { "type": "string", "format": "uuid" },
+        "void_reason_code": { "$ref": "#/$defs/ReasonCode" },
         "rejection_reason_code": { "$ref": "#/$defs/ReasonCode" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "approved" } }, "required": ["state"] },
+          "then": { "required": ["approver", "decided_at", "disclosure_digest"] }
+        }
+      ]
     },
     "ExecutionReceipt": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["token_id", "envelope_digest", "broker_id", "started_at", "finished_at", "status"],
+      "required": ["token_id", "envelope_digest", "broker_id", "started_at", "status", "result_tagged_untrusted"],
       "properties": {
         "token_id": { "type": "string", "format": "uuid" },
         "envelope_digest": { "$ref": "#/$defs/Digest" },
         "broker_id": { "type": "string", "maxLength": 128 },
         "connector": { "type": "string", "maxLength": 128 },
+        "connector_kind": { "type": "string", "enum": ["sync", "async"] },
+        "job_handle": { "description": "Async connectors: handle used to observe completion (FR-26).", "type": "string", "maxLength": 256 },
+        "lease": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "resource_key": { "$ref": "#/$defs/ResourceKey" },
+            "acquired": { "type": "boolean" },
+            "lease_id": { "type": "string", "format": "uuid" },
+            "expires_at": { "type": "string", "format": "date-time" }
+          }
+        },
+        "duplicate_delivery": { "description": "Same token, same broker, within TTL, identical envelope: benign retry, not replay (FR-22).", "type": "boolean" },
         "started_at": { "type": "string", "format": "date-time" },
         "finished_at": { "type": "string", "format": "date-time" },
-        "status": { "type": "string", "enum": ["succeeded", "failed", "timeout", "refused"] },
+        "status": { "type": "string", "enum": ["succeeded", "failed", "timeout", "refused", "dispatched"] },
         "refusal_reason_code": { "$ref": "#/$defs/ReasonCode" },
         "result_digest": { "$ref": "#/$defs/Digest" },
         "result_size_bytes": { "type": "integer", "minimum": 0 },
@@ -241,21 +381,67 @@
         "result_tagged_untrusted": { "const": true }
       }
     },
-    "Override": {
-      "description": "Human operational override, e.g. demoting an action class to advisory during an incident. Never grants an ALLOW.",
+    "Completion": {
+      "description": "Observed completion of an asynchronous action, from the registered execution-completion fact (FR-26).",
       "type": "object",
       "additionalProperties": false,
-      "required": ["override_id", "principal", "kind", "target", "reason_code", "effective_at"],
+      "required": ["job_handle", "status", "observed_at", "source"],
+      "properties": {
+        "job_handle": { "type": "string", "maxLength": 256 },
+        "status": { "type": "string", "enum": ["succeeded", "failed", "cancelled", "unknown"] },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "source": { "type": "string", "maxLength": 128 },
+        "lease_released": { "type": "boolean" },
+        "result_digest": { "$ref": "#/$defs/Digest" }
+      }
+    },
+    "EffectVerification": {
+      "description": "Post-execution comparison of the observed effect against the proposal, using a fresh state fact (FR-57).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["critic_id", "version", "resource_key", "result", "observed_at"],
+      "properties": {
+        "critic_id": { "$ref": "#/$defs/CriticId" },
+        "version": { "type": "string", "maxLength": 96 },
+        "resource_key": { "$ref": "#/$defs/ResourceKey" },
+        "result": { "type": "string", "enum": ["match", "mismatch", "unknown"] },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "state_fact_digest": { "$ref": "#/$defs/Digest" },
+        "counterexample": { "$ref": "#/$defs/Counterexample" },
+        "reason_code": { "$ref": "#/$defs/ReasonCode" }
+      }
+    },
+    "Override": {
+      "description": "Operational override. Never grants an ALLOW (INV-11, FR-48). `demote_mode` requires two distinct authorizing principals and auto-expires.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["override_id", "kind", "target", "authorized_by", "reason_code", "effective_at"],
       "properties": {
         "override_id": { "type": "string", "format": "uuid" },
-        "principal": { "type": "string", "maxLength": 128 },
-        "kind": { "type": "string", "enum": ["demote_mode", "revoke_token", "void_approval", "rotate_key"] },
+        "kind": { "type": "string", "enum": ["halt_class", "demote_mode", "revoke_token", "void_approval", "rotate_key"] },
         "target": { "type": "string", "maxLength": 256 },
+        "authorized_by": {
+          "description": "One principal for tighten-only kinds; two distinct principals for demote_mode (FR-48).",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/Principal" }
+        },
         "reason_code": { "$ref": "#/$defs/ReasonCode" },
         "ticket_ref": { "type": "string", "maxLength": 128 },
         "effective_at": { "type": "string", "format": "date-time" },
-        "expires_at": { "type": "string", "format": "date-time" }
-      }
+        "expires_at": { "description": "Mandatory for demote_mode; at most 1 hour after effective_at (FR-48).", "type": "string", "format": "date-time" },
+        "superseded_by_registry_version": { "type": "string", "maxLength": 64 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "demote_mode" } }, "required": ["kind"] },
+          "then": {
+            "required": ["expires_at", "ticket_ref"],
+            "properties": { "authorized_by": { "minItems": 2, "uniqueItems": true } }
+          }
+        }
+      ]
     },
     "Checkpoint": {
       "type": "object",
