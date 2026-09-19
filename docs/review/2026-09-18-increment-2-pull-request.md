@@ -1,19 +1,25 @@
-# Increment 2 — pull-request description (ready to open)
+# Increment 2 — pull-request description
 
-> **Why this is a file and not a pull request.** The repository has exactly one
-> branch, `claude/sdd-plan-peer-review-i2v012`, and it is also the default
-> branch, so there is nothing for a pull request to target. `main` was created
-> for PR #1, merged, and deleted. This body is checked in so it is ready the
-> moment a base branch exists; see "Blocked on you" below, and
-> `08-increment-2-plan.md` §4.4.
+> **What this file is.** The body of
+> [PR #3](https://github.com/ianshank/Neuroharness/pull/3), kept in the tree so
+> that it is reviewable under the same rules as everything else it describes and
+> so that a correction to it leaves a commit behind.
 >
-> Copy everything below the rule into the PR body.
+> It was written before the pull request could be opened: the repository had
+> exactly one branch, which was also the default, so there was nothing to
+> target. `main` was recreated at the increment-1 end state (`b16f3ba`) and is
+> now the base. The repository *default* branch is still this topic branch —
+> that half remains open, and is listed under "Blocked on you" below.
+>
+> Everything below the rule is the PR body. It carries no diffstat: the file is
+> itself part of the diff, so any count written here is falsified by the commit
+> that writes it. GitHub computes the live one on the pull request.
 
 ---
 
 ## Increment 2: repair the drift, close what can be closed, build what is honest
 
-Implements `docs/sdd/08-increment-2-plan.md`. **143 files, +11,666 / −372.**
+Implements `docs/sdd/08-increment-2-plan.md`.
 
 Increment 1 delivered a correct decision procedure. This increment did not extend
 it — it repaired six defects inside it, three of which were live rather than
@@ -110,13 +116,45 @@ Every CI job run with its own command, not an approximation:
 | Hard-rule register | pass (17 known gaps, counted) |
 | Docs: spec IDs, ADR index, scenarios | pass |
 | `pip-audit` | no known vulnerabilities |
-| `gitleaks` | **not run** — CI pins a release binary, not installable locally |
+| `gitleaks` (history, 38 commits) | pass, after the two findings below |
 
-That QA run found a real defect: `python -m ruff` (0.16.8, what CI installs)
-reported `RUF036` where the `ruff` on PATH (0.15.8) did not. `ruff>=0.6` and
-`mypy>=1.11` were unbounded floors, so the gate's rule set drifted underneath it
-and the build could go red with no change to the tree. Both are now
-upper-bounded.
+That QA run found two real defects, and missed a third until CI ran.
+
+**The linter's rule set was drifting under its own gate.** `python -m ruff`
+(0.16.8, what CI installs) reported `RUF036` where the `ruff` on PATH (0.15.8)
+did not. `ruff>=0.6` and `mypy>=1.11` were unbounded floors, so the build could
+go red with nothing in the tree having changed. Both are now upper-bounded — and
+`.pre-commit-config.yaml`, whose own comment says the hooks "mirror CI stage 1
+exactly", was pinned at `v0.14.0` and had been missed. It now matches. Its
+`ruff-format --check` hook is removed for the reason CI already records for
+excluding that stage: it fails on 53 of 134 files, so it was a blocking hook
+that was red on every commit, which is a hook people learn to `--no-verify`
+past.
+
+**The secret scan was reported as not run, and it was runnable.** The claim in
+the first version of this table — *"CI pins a release binary, not installable
+locally"* — was false: the same pinned binary downloads and runs here, and doing
+so reproduces the CI failure exactly. It reported two findings, both **key
+identifiers rather than keys**: `key_id` in the fact-provider specification's
+signature block, whose `value` is the literal text `<base64>`, and `key_id` in
+the checkpoint test fixture, whose `signature` is a self-describing example
+string. A key id is public by construction — it rides in the signature block so
+a verifier knows which public key to fetch (`NFR-17`, `SEC-10`).
+
+`.gitleaks.toml` exempts those two values and nothing else: anchored literals,
+not fingerprints (which name a line number and go stale) and not the `key_id`
+field (which would stop the scanner reporting a real key mislabelled as an
+identifier). Verified narrow rather than asserted — a *different* key id of the
+same shape, `fpr-signing-2027q1`, is still caught.
+
+The allowlist is held to that shape by `tests/unit/test_secret_scan_allowlist.py`
+rather than by convention, because widening it is the cheapest response to the
+next false positive and leaves a green check behind. Five mutations of the
+config were confirmed to fail it: `useDefault = false`, an unanchored entry, an
+anchored wildcard, a `paths` exclusion, and an entry gone stale.
+
+This is the second claim in this document falsified by checking it, after the
+twelve in the plan. Both were claims that something could not be verified.
 
 ### What this does *not* do
 
@@ -140,7 +178,7 @@ no broker and no identity layer.
 | **`P0-12` — name the humans** | **Nine `Proposed` ADRs and nobody who can accept one.** Also blocks two-person review for `P1-15`, `OQ-05`, the `P0-01`/`P0-07` signatures, and `D-7` | Sponsor |
 | **`P0-13` — provision** | Gates `P1-01a`, `P1-07`-for-real, `P1-08`, and everything behind them | Sponsor, with procurement |
 | **`D-7`** — does a missing *required* fact ever warrant escalation? | Hard precondition on fact providers. The reference registry already contains the provably inert shape | Product + security |
-| **Branching model** | Why this is a file. One branch, which is the default | Repository owner |
+| **Default branch** | `main` now exists at the increment-1 end state and is this PR's base, but the repository default is still this topic branch. Settings → Branches | Repository owner |
 | **The licence** | `ADR-0012` recommends Apache-2.0 and deliberately does not decide it: a grant cannot be withdrawn once given | Repository owner |
 
 **Recommendation: do not schedule increment 3 until `P0-12` closes.** It is the

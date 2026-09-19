@@ -172,7 +172,7 @@ The reference workflow's facts (`ci_result`, `change_approval`, `deploy_state`, 
 |---|---|---|
 | `uv.lock` | Governance §4 commits to it; there is no lockfile, dependencies are floating ranges | **Do it.** A project whose central claim is replay determinism (`NFR-07`, `R-13`) cannot have an unpinned dependency set. One runtime dependency is the easiest this will ever be |
 | `[tool.ruff]`, `[tool.mypy]` in `pyproject.toml` | Neither exists; `mypy` is not in the `[dev]` extra | **Do it.** The rule set and strictness the gate enforces are undeclared anywhere in the repo |
-| `gitleaks` | Single action, no admin rights | **Do it.** The repo guards a signer abstraction and key-id handling by constitution |
+| `gitleaks` | Single action, no admin rights | **Do it.** The repo guards a signer abstraction and key-id handling by constitution. It scans history rather than the tree, and its two findings were both a `key_id` — public by construction, and the thing the `generic-api-key` rule cannot distinguish from a key. `.gitleaks.toml` exempts those two values as anchored literals; `tests/unit/test_secret_scan_allowlist.py` holds that shape, because widening an allowlist is the cheapest answer to the next false positive and leaves a green check behind |
 | `pip-audit` | Runs against `pyproject.toml` | **Do it.** A one-dependency TCB is the easiest moment |
 | `.pre-commit-config.yaml` | Absent | Do it; it is where the ratchets live locally |
 | CodeQL default setup, Trivy, branch protection, Scorecard, SBOM/provenance/cosign | Need repository-admin settings or a container | **Correctly deferred.** Named here so the deferral is a decision |

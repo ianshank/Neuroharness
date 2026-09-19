@@ -1,0 +1,45 @@
+# Secret-scanning configuration for CI stage 9, which runs
+# `gitleaks detect --source . --redact --no-banner --verbose` over the whole
+# history rather than the working tree.
+#
+# The default rule set is extended, never replaced. A configuration that
+# redefines the rules is one that silently drops every rule it forgot to copy.
+
+[extend]
+useDefault = true
+
+# Two allowlist entries, and both are a signing-key *identifier* rather than a
+# key.
+#
+# The `generic-api-key` rule matches on a field name and the value's entropy,
+# and cannot tell "which key signed this" from "the key". A `key_id` is public
+# by construction: it travels inside the signature block precisely so that a
+# verifier knows which public key to fetch (`NFR-17`, `SEC-10`). At both sites
+# the adjacent field that would hold the secret holds a literal placeholder
+# instead, so there is nothing at either one to leak.
+#
+# Allowlisted by exact anchored value, which is the narrowest of the three
+# available scopes and the only durable one:
+#
+#   - by fingerprint names a commit and a line number, so the entry goes stale
+#     the moment the line moves and the next person's cheapest repair is to
+#     widen it;
+#   - by field name would stop the scanner reporting a real key mislabelled as
+#     an identifier, which is a thing it should report;
+#   - by value leaves the gate's reach over every other string in the
+#     repository, including every future key id, exactly as it was.
+#
+# A third synthetic key id that trips this rule should be looked at rather
+# than appended here. `tests/unit/test_secret_scan_allowlist.py` enforces that
+# shape: every entry anchored, every entry still matching something real.
+
+[allowlist]
+description = "Synthetic signing-key identifiers. See the note in this file."
+regexes = [
+  # `docs/sdd/09-fact-provider-specification.md` — the fact-provider
+  # registry's signature block, whose `value` is the literal text `<base64>`.
+  '''^fpr-signing-2026q3$''',
+  # `tests/unit/test_schema_conformance.py` — the checkpoint fixture's anchor,
+  # whose `signature` is a self-describing example string.
+  '''^anchor-signing-2026-09$''',
+]

@@ -6,14 +6,25 @@
 # file exists to close.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.0
+    # Held to the same range as `pyproject.toml`'s dev dependency, which is what
+    # CI installs. A linter minor release adds rules, so a hook pinned older
+    # than the gate passes locally and fails in CI on an unchanged tree - the
+    # slow loop this file exists to close, arriving as a build that goes red
+    # with nobody having touched it.
+    rev: v0.16.8
     hooks:
       - id: ruff
         name: ruff (lint)
         args: [--fix]
-      - id: ruff-format
-        name: ruff (format check)
-        args: [--check]
+      # No `ruff-format` hook. It is not in CI stage 1 either, and for the same
+      # recorded reason: `ruff format` would rewrite 53 of the 134 files in the
+      # tree, so the hook fails on every commit until somebody reformats. A
+      # blocking hook that is always red is a hook people pass `--no-verify`
+      # past, and the habit does not stay confined to that one hook.
+      #
+      # Whether this project adopts `ruff format` is a real choice with a
+      # 53-file diff behind it, and it belongs in a change of its own where the
+      # diff is the whole review rather than buried in one.
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
