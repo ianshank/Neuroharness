@@ -47,6 +47,15 @@ branch = true
 
 [tool.coverage.report]
 exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError", "\\.\\.\\."]
+# Governance section 3, stage 2. The floor lived only in `ci.yml` as
+# `MIN_COVERAGE`, so `pytest --cov` run locally enforced nothing and the first
+# place a contributor learned they were under it was a red pull request. That is
+# the same argument `ci.yml` already makes for the ruff rule set -- "a gate whose
+# rule set is spelled in a workflow file is a gate nobody can reproduce locally"
+# -- applied to the one gate it had not been applied to. CI keeps its env var so
+# the number is visible where the job is read; the two are checked against each
+# other by `tests/unit/test_gate_parity.py`.
+fail_under = 90
 
 # --- Lint and type-check (governance section 3, stage 1) ----------------------
 #
@@ -61,8 +70,15 @@ target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-# `select` is the blocking set: it is clean at zero and stays that way. Rules
-# move into it from `ratchet` below, never out of it.
+# `select` is the blocking set: it is clean at zero and stays that way. A rule
+# only ever moves into it, never out of it; widening `ignore` to quiet a finding
+# is the change this comment exists to make visible in review.
+#
+# An earlier version of this comment pointed at a `ratchet` group "below" that
+# was never written. A comment naming a mechanism the file does not have is the
+# documentation half of the defect this project keeps finding in its code, so it
+# is corrected rather than implemented: there is no staging area, and a rule is
+# either blocking or absent.
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "RUF"]
 
 ignore = [

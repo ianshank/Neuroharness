@@ -55,6 +55,8 @@ from neuroharness.models.record import _REASON_CODE_RE
 from neuroharness.reason import ReasonCode, ReasonName
 from neuroharness.registry.resource_keys import is_resource_key
 
+pytestmark = pytest.mark.property
+
 #: The typed alias every wire model reaches the grammar through. ``ResourceKey``
 #: annotates ``ActionClassRef.resource_key`` on the envelope and, imported by
 #: ``models/record.py``, ``RecordActionClassRef``, ``ExecutionLease`` (``FR-25``'s

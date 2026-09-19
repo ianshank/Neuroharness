@@ -75,6 +75,14 @@ jobs:
       - name: mypy --strict
         run: python -m mypy
 
+      # Static checks on the repository rather than on the code: that the
+      # Makefile runs what this workflow runs, and that every module in
+      # `tests/property/` carries the marker `-m property` selects on. Both are
+      # the same shape as lint -- a rule about the tree, checked without running
+      # the thing it describes -- so they run here rather than as a ninth job.
+      - name: Repository conventions (gate parity, suite markers)
+        run: python -m pytest tests/unit/test_gate_parity.py tests/unit/test_suite_conventions.py
+
   tests:
     name: Unit tests and coverage (${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -101,6 +109,23 @@ jobs:
           --cov=neuroharness
           --cov-branch
           --cov-fail-under=${{ env.MIN_COVERAGE }}
+          --cov-report=term-missing
+
+      # The other half of governance section 3, stage 2: "TCB >= 90% lines;
+      # resolver 100% branches". The second clause was specified from the start
+      # and enforced nowhere, and `08-increment-2-plan.md` recorded it as
+      # "unenforceable as written" because `resolve/safety.py`'s import-time
+      # rank guard was uncovered. It is covered now -- by a test that makes the
+      # guard fire rather than by a pragma -- so the clause is enforceable and
+      # this is it. Its own step, so that a resolver regression reads as a
+      # resolver regression and not as a one-tenth-of-a-percent drop in a
+      # package-wide number.
+      - name: The resolver is at 100% branches
+        run: >-
+          python -m pytest
+          --cov=neuroharness.resolve
+          --cov-branch
+          --cov-fail-under=100
           --cov-report=term-missing
 
   mutation-fixtures:
@@ -150,6 +175,15 @@ jobs:
 
       - name: Models and schemas agree in both directions
         run: python -m pytest tests/unit/test_schema_conformance.py tests/unit/test_schema_versions.py
+
+      # `tools/render_schema_patterns.py` writes the resource-key and
+      # reason-code nodes into both published schemas, and hand-editing what it
+      # writes is a test failure by design. That check existed and ran only
+      # inside the full unit-test job, so a drift between the Python grammar and
+      # the published contract was reported under "Unit tests" -- the one job
+      # name that tells a reviewer nothing about which contract moved.
+      - name: The generated schema patterns match their Python source
+        run: python -m pytest tests/unit/test_schema_patterns_are_generated.py
 
       - name: Published schemas are valid JSON Schema
         run: |
@@ -266,6 +300,15 @@ jobs:
       - name: The ADR index and the ADR files agree
         run: python -m pytest tests/unit/test_adr_index.py
 
+      # `.claude/skills/` encodes the multi-site procedures this repository gets
+      # wrong when rushed. Instructions rot the way the SDD documents rot, and a
+      # stale skill is worse than none: it reads authoritative and sends a
+      # contributor confidently into the wrong edit. Each skill carries a
+      # machine-readable block naming the sites it tells you to change, and this
+      # holds those names to the tree.
+      - name: Every skill still describes the tree it documents
+        run: python -m pytest tests/unit/test_skills_are_current.py
+
       - name: Every acceptance scenario is declared and its claims hold
         # Article VII asks which scenario accepts a change. Forty-five are
         # specified and three are executed; the register makes that a number
@@ -315,6 +358,14 @@ jobs:
         # `--redact` so a finding does not republish the secret in a public log,
         # which is the classic way a leak detector becomes a leak.
         run: gitleaks detect --source . --redact --no-banner --verbose
+
+      # The allowlist is the cheap way to make this stage quiet, so it is held
+      # to a shape by a test: default rules extended and never replaced, every
+      # entry an anchored literal, and every entry still matching something real.
+      # It ran only inside the full unit-test job until now, which is the wrong
+      # place for the guard on the gate it guards.
+      - name: The secret-scan allowlist has not been widened
+        run: python -m pytest tests/unit/test_secret_scan_allowlist.py
 
       - name: Install pip-audit
         run: python -m pip install --upgrade pip && python -m pip install pip-audit

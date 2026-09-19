@@ -12,7 +12,7 @@ Neuroharness sits between an agent and the tools it wants to call. The agent pro
 
 **Not built yet:** every component that talks to something outside the process. The MCP gateway, the policy decision point client, the critic bank and the broker are absent, and with them the `policy/` bundles and the `critics/` packs; they attach to the core through the protocol seams it already defines. `docs/sdd/07-increment-1-plan.md` scopes the increment, and its section 4a lists which of the twelve specified CI stages run today and which do not.
 
-This repository also holds the research input and four rounds of peer review. Round two put the specification through four adversarial reviews; the resulting v0.2 changed how approvals bind, how rollout modes interact with failure, how mutual exclusion is enforced, and what the project claims to verify. Round three is the first to check a research synthesis against running code rather than against the specification alone; round four attacks the implementation itself, and found a resource-key grammar the increment-2 repair had left running in three record fields.
+This repository also holds the research input and five rounds of peer review. Round two put the specification through four adversarial reviews; the resulting v0.2 changed how approvals bind, how rollout modes interact with failure, how mutual exclusion is enforced, and what the project claims to verify. Round three is the first to check a research synthesis against running code rather than against the specification alone; round four attacks the implementation itself, and found a resource-key grammar the increment-2 repair had left running in three record fields; round five turns the same attention on the repository — its gates, its hygiene and the artefacts it deliberately does not have.
 
 ## Document map
 
@@ -23,6 +23,7 @@ This repository also holds the research input and four rounds of peer review. Ro
 | `docs/review/2026-09-18-round-2-deep-dive-review.md` | Round-two review of the specification itself: 71 findings from four adversarial lenses, plus an audit that corrects round one. | You want to know how the design was attacked and what broke. |
 | `docs/review/2026-09-19-round-3-synthesis-vs-code-review.md` | Round-three review: a second, multi-model research synthesis checked claim by claim against the tree at `944e077`. | You want to know which outside recommendations this repository does not already hold, and which of those are right. |
 | `docs/review/2026-09-19-round-4-code-adversarial-review.md` | Round-four review: the implementation attacked and executed — a live grammar defect, three specification defects, and the security properties that held under test. | You want to know what the deterministic core actually does under attack, not what it claims. |
+| `docs/review/2026-09-19-round-5-repository-gap-analysis.md` | Round-five review of the repository itself: which of the twelve CI stages run, the tech-debt register, and what is deliberately absent with the component that unblocks each. | You want to know why there is no Dockerfile, or what is owed and by whom. |
 | `docs/sdd/README.md` | How Spec-Driven Development works in this repo and the status of each SDD document. | You are about to change anything under `docs/sdd/`. |
 | `docs/sdd/00-constitution.md` | Non-negotiable principles every design and code change must satisfy. | Always. Start here. |
 | `docs/sdd/01-specification.md` | Functional/non-functional requirements, invariant registry, verdict semantics, acceptance scenarios. | You are implementing or testing a requirement. |
@@ -41,7 +42,15 @@ An **action envelope** (agent-authored proposal + harness-authored context) is c
 
 ## Contributing
 
-Read `CLAUDE.md` (conventions for human and AI contributors) and `docs/sdd/06-delivery-and-governance.md` before opening a change. Changes to hard-gate policy require a negative mutation fixture and two-person review.
+Read `CONTRIBUTING.md` first, then `CLAUDE.md` (conventions for human and AI contributors) and `docs/sdd/06-delivery-and-governance.md`. Changes to hard-gate policy require a negative mutation fixture and two-person review.
+
+```
+make install   # the package and its dev extra
+make gate      # every gate CI blocks on, in CI's order
+make help      # one target per CI job
+```
+
+`.claude/skills/` holds the procedures that touch several files at once — adding a reason code, a record kind or a mutation fixture, and running the gates. They are checked against the tree by `tests/unit/test_skills_are_current.py`, so a skill that goes stale fails CI rather than misleading the next contributor.
 
 ## License
 
