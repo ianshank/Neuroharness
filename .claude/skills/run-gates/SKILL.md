@@ -5,15 +5,23 @@ description: Run the repository's quality gates the way CI runs them, and repair
 
 # Running the gates
 
-Eight jobs block a pull request. `make gate` runs every blocking one in CI's
-order; `tests/unit/test_gate_parity.py` fails if the Makefile and the workflow
-ever stop agreeing, so the local run cannot quietly become the kinder one.
+Eight jobs block a pull request, and two targets cover them between them:
 
 ```
 make install   # the package and its dev extra, as every CI job does
-make gate      # everything CI blocks on
-make security  # separate: needs gitleaks and pip-audit installed
+make gate      # every gate that needs no external binary
+make gate-all  # the above plus gitleaks and pip-audit -- all eight jobs
 ```
+
+`gate` is the fast loop, `gate-all` the complete one. The split is on whether an
+external binary is needed, not on how important the check is: `security` fails
+hard when gitleaks or pip-audit is missing, so a `gate` depending on it would be
+red on every checkout without them, and an always-red target is one people learn
+to skip.
+
+`tests/unit/test_gate_parity.py` asserts that every module CI blocks on is
+reachable from **`gate-all`** -- the dependency closure, not mere membership in
+the Makefile -- so the local run cannot quietly become the kinder one.
 
 Individual targets — `make help` lists them — map one-to-one onto the jobs:
 `lint`, `conventions`, `coverage`, `resolver-coverage`, `mutation`, `schema`,
@@ -64,13 +72,13 @@ nothing. The gap analysis records each with the component that unblocks it.
 ```json coupling
 {
   "sites": [
-    {"path": "Makefile", "contains": "gate:", "why": "the aggregate target"},
+    {"path": "Makefile", "contains": "gate-all:", "why": "the aggregate covering all eight jobs"},
     {"path": "Makefile", "contains": "resolver-coverage:", "why": "governance stage 2's second clause"},
     {"path": ".github/workflows/ci.yml", "contains": "mutation-fixtures:", "why": "the job the mutation target mirrors"},
     {"path": "tests/unit/test_gate_parity.py", "contains": "def test_the_coverage_floor_is_one_number", "why": "the floor is declared three times and must agree"},
     {"path": "CONTRIBUTING.md", "contains": "never", "why": "the rules a repair may not break"},
     {"path": "tools/render_schema_patterns.py", "contains": "--check", "why": "the regenerate-and-compare gate"}
   ],
-  "verify": ["gate"]
+  "verify": ["gate", "gate-all"]
 }
 ```

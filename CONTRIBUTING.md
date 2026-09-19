@@ -39,15 +39,20 @@ This is a fail-closed policy-and-verification harness for LLM agent tool calls. 
 
 ## Running the checks
 
-Eight jobs block a pull request. `make gate` runs every blocking one in the order
-CI runs them, so the loop is local rather than a push and a wait:
+Eight jobs block a pull request, and two targets cover them between them:
 
 ```sh
 make install   # the package and its dev extra, as every CI job does
-make gate      # everything CI blocks on
+make gate      # every gate that needs no external binary
+make gate-all  # the above plus gitleaks and pip-audit -- all eight jobs
 make help      # one target per job: lint, coverage, mutation, schema, docs, ...
-make security  # separate: needs gitleaks and pip-audit installed
 ```
+
+`gate` is the fast loop and `gate-all` is the complete one. The split is on
+whether an external binary is needed, not on how important the check is: once
+`security` propagates its failures, a `gate` that depended on it would be red on
+every checkout without gitleaks installed, and this file's own argument about
+always-red hooks applies to always-red targets too.
 
 `tests/unit/test_gate_parity.py` fails if the Makefile and the workflow ever stop
 agreeing. A local gate that runs less than the pipeline is worse than none,

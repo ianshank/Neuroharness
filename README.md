@@ -46,7 +46,8 @@ Read `CONTRIBUTING.md` first, then `CLAUDE.md` (conventions for human and AI con
 
 ```
 make install   # the package and its dev extra
-make gate      # every gate CI blocks on, in CI's order
+make gate      # every gate that needs no external binary
+make gate-all  # the above plus gitleaks and pip-audit -- all eight CI jobs
 make help      # one target per CI job
 ```
 

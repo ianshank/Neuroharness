@@ -46,6 +46,7 @@ from pydantic import (
     Field,
     SerializerFunctionWrapHandler,
     StringConstraints,
+    WithJsonSchema,
     field_validator,
     model_serializer,
     model_validator,
@@ -220,6 +221,21 @@ ResourceKey = Annotated[
     str,
     StringConstraints(max_length=grammar.MAX_RESOURCE_KEY_LENGTH),
     AfterValidator(_is_resource_key),
+    # `AfterValidator` has no JSON Schema representation, so without this the
+    # generated schema for this alias is `{"type": "string", "maxLength": 158}`
+    # -- it would accept `s3:bucket_name` while the model refuses it. Nothing in
+    # the tree calls `model_json_schema()` today, so the regression is latent
+    # rather than live; it is restored anyway, because a model whose
+    # self-description is wider than its behaviour is the same defect this alias
+    # was just repaired for, one layer out. The pattern is ECMA-262 (the
+    # look-ahead included, per `grammar.py`), which is what JSON Schema reads.
+    WithJsonSchema(
+        {
+            "type": "string",
+            "pattern": grammar.RESOURCE_KEY_PATTERN.pattern,
+            "maxLength": grammar.MAX_RESOURCE_KEY_LENGTH,
+        }
+    ),
 ]
 
 #: Fact key components: bounded scalars only. A nested object here would be an

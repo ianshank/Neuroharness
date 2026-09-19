@@ -111,3 +111,78 @@ def test_the_marker_check_reads_a_real_declaration(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert _module_marks(several) == {"property", "mutation"}
+
+
+# --- The generated schema describes what the model enforces ------------------
+
+
+def test_the_resource_key_alias_publishes_its_pattern() -> None:
+    """``ResourceKey``'s generated JSON Schema is as narrow as its validator.
+
+    ``AfterValidator`` has no JSON Schema representation. When the alias moved
+    from ``StringConstraints(pattern=...)`` to a validator -- necessary, because
+    pydantic v2's Rust regex engine has no look-around and the grammar's length
+    guard is one -- the generated schema silently became
+    ``{"type": "string", "maxLength": 158}``: wider than the model, and wide
+    enough to admit `s3:bucket_name`, the exact key the repair had just excluded.
+
+    Nothing in the tree calls ``model_json_schema()`` today, so that was latent
+    rather than live. It is asserted anyway: a model whose self-description is
+    wider than its behaviour is the same class of defect the alias was repaired
+    for, and the first consumer of the generated schema would inherit it silently.
+    """
+    from pydantic import TypeAdapter
+
+    from neuroharness import grammar
+    from neuroharness.models.envelope import ResourceKey
+
+    schema = TypeAdapter(ResourceKey).json_schema()
+
+    assert schema.get("pattern") == grammar.RESOURCE_KEY_PATTERN.pattern, (
+        "the generated schema does not carry the grammar's pattern, so it accepts "
+        f"keys the model refuses: {schema}"
+    )
+    assert schema.get("maxLength") == grammar.MAX_RESOURCE_KEY_LENGTH
+    assert schema.get("type") == "string"
+
+
+def test_the_published_pattern_and_the_validator_agree_on_real_keys() -> None:
+    """The schema and the model give the same answer, key by key.
+
+    The assertion above compares one string to another. This one checks that the
+    string means what the validator means, which is the property a consumer of
+    the generated schema actually depends on.
+    """
+    import re
+
+    from pydantic import TypeAdapter, ValidationError
+
+    from neuroharness.models.envelope import ResourceKey
+
+    adapter = TypeAdapter(ResourceKey)
+    published = re.compile(adapter.json_schema()["pattern"])
+
+    cases = [
+        "service:example-api/target:production",
+        "cluster-prod:svc-a",
+        "k8s-namespace:default",
+        "s3-bucket:logs",
+        "s3:bucket_name",
+        "my_kind:foo",
+        "repo:-foo",
+        "repo:foo",
+    ]
+    disagreements = []
+    for key in cases:
+        by_schema = published.fullmatch(key) is not None
+        try:
+            adapter.validate_python(key)
+            by_model = True
+        except ValidationError:
+            by_model = False
+        if by_schema != by_model:
+            disagreements.append((key, by_schema, by_model))
+
+    assert not disagreements, (
+        f"the published pattern and the validator disagree: {disagreements}"
+    )

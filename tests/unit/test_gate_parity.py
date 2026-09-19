@@ -12,11 +12,16 @@ would force the Makefile to grow noise and would fail on every unrelated workflo
 edit. What must not drift is the set of test modules each side names, the
 coverage floor, and the marker selections -- because those are the gate.
 
-The direction that matters is **workflow ⊆ Makefile**: every module CI blocks on
-must be reachable from ``make gate``. The reverse is deliberately allowed. The
-Makefile names ``tools/render_schema_patterns.py --check`` and a resolver branch
-gate that the workflow reaches only through the full suite; a local target that
-checks *more* is not a drift, it is the point.
+The direction that matters is **workflow ⊆ the closure of ``gate-all``**: every
+module CI blocks on must be reachable from ``make gate-all``, which is the
+aggregate that covers all eight jobs. Not ``make gate`` -- that one deliberately
+excludes the external security scans so it stays runnable without gitleaks
+installed, and asserting against it would let a blocking job go uncovered.
+
+The reverse direction is deliberately allowed. The Makefile names
+``tools/render_schema_patterns.py --check`` and a resolver branch gate that the
+workflow reaches only through the full suite; a local target that checks *more*
+is not a drift, it is the point.
 """
 
 from __future__ import annotations
