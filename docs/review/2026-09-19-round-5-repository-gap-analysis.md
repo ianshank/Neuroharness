@@ -5,7 +5,7 @@
 | **Subject** | The repository as an artefact — tooling, gates, hygiene, structure and documentation — rather than the specification (round 2), an external synthesis (round 3) or the implementation's behaviour (round 4). |
 | **Method** | Three parallel surveys (tooling and automation; code structure and hygiene; test suite and gates), every claim measured against the tree rather than recalled. §6 lists the commands. |
 | **Date** | 2026-09-19 |
-| **Outcome** | 2 gates turned on, 6 defects fixed, 23 items registered, 7 artefacts recorded as deliberately absent with the component that unblocks each. |
+| **Outcome** | 2 gates turned on, 6 defects fixed, 23 items registered, 8 artefacts recorded as deliberately absent with the component that unblocks each. |
 
 ---
 
@@ -155,15 +155,22 @@ reviewer will look.
 ## 6. What was measured
 
 ```
-PYTHONPATH=src python3 -m pytest                      # 2724 passed (was 2709)
+PYTHONPATH=src python3 -m pytest                      # 2774 passed (was 2709)
 PYTHONPATH=src python3 -m pytest --cov=neuroharness --cov-branch
                                                       # 99.20%, floor 90 from pyproject
 make resolver-coverage                                # resolve/ 100% stmts, 100% branches
 python3 -m ruff check src tests                       # clean
 python3 -m mypy                                       # clean, 43 source files
-make gate                                             # every blocking gate, CI's order
+make gate                                             # every gate needing no external binary
+make gate-all                                         # the above plus gitleaks and pip-audit
 PYTHONPATH=src python3 -m pytest -m property --collect-only   # 33 (was 23)
 ```
+
+An earlier draft of this block reported 2724, which was the count when it was
+written and not the count when the round shipped. A stale figure in the section
+headed "What was measured" is the defect this document is about, so it is
+recorded here rather than silently corrected: the figures above are re-run, not
+edited.
 
 Structural figures: 43 source files, 13,262 lines — 46.8% code, 29.5% docstring,
 7.3% comment. Tests are 20,064 lines, 3.2× the production code. One runtime

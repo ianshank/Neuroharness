@@ -28,9 +28,13 @@ This project has not made a release. Everything below is unreleased.
   skill that goes stale fails CI rather than sending the next contributor
   confidently into the wrong edit.
 - **`Makefile`** — one target per CI job, wrapping the commands the workflow
-  actually runs. `make gate` runs every blocking gate in CI's order.
-  `tests/unit/test_gate_parity.py` fails if the Makefile and the workflow drift,
-  because a local gate that runs less than the pipeline is worse than none.
+  actually runs. `make gate` runs every gate needing no external binary;
+  `make gate-all` adds the gitleaks and pip-audit scans, so between them they
+  cover all eight blocking jobs. `tests/unit/test_gate_parity.py` fails if the
+  Makefile and the workflow drift — and it checks the *dependency closure* of
+  `gate-all`, not membership in the file, because a module named only in an
+  unreachable target satisfies the weaker check while `make gate` does not run
+  it. That was a real hole, found in review after the first version landed.
 - **`CHANGELOG.md`** — this file.
 - **Governance section 3, stage 2's second clause is now enforced**: the
   resolver at 100% branches, as its own CI step. It was specified from the start,

@@ -28,9 +28,9 @@ PYTEST := $(PYTHON) -m pytest
 MIN_COVERAGE ?= 90
 
 .DEFAULT_GOAL := help
-.PHONY: help install gate lint typecheck test coverage resolver-coverage \
-        mutation schema magic-values hard-rules docs security schemas-current \
-        conventions clean
+.PHONY: help install gate gate-all lint typecheck test coverage resolver-coverage \
+        mutation schema magic-values hard-rules docs security secrets-allowlist \
+        schemas-current conventions clean
 
 help: ## Show this help.
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -86,17 +86,32 @@ docs: ## CI job `docs`: spec IDs, ADR index, scenarios and the skills.
 		tests/unit/test_scenario_coverage.py \
 		tests/unit/test_skills_are_current.py
 
-security: ## CI job `security`: secrets and dependency advisories.
+secrets-allowlist: ## The gitleaks allowlist has not been widened. No binary needed.
 	$(PYTEST) tests/unit/test_secret_scan_allowlist.py
-	@command -v gitleaks >/dev/null 2>&1 \
-		&& gitleaks detect --source . --redact --no-banner --verbose \
-		|| echo "gitleaks not installed; CI pins 8.18.4 -- see .github/workflows/ci.yml"
-	$(PYTHON) -m pip_audit --strict --progress-spinner=off . \
-		|| echo "pip-audit not installed; run: $(PYTHON) -m pip install pip-audit"
 
-gate: lint conventions coverage resolver-coverage mutation schema \
-      schemas-current magic-values hard-rules docs ## Everything CI blocks on, in CI's order.
-	@echo 'All blocking gates passed. The security gate is separate: it needs gitleaks and pip-audit.'
+security: secrets-allowlist ## CI job `security`: secrets and dependency advisories.
+	@# Each tool's own exit status is the recipe's. An earlier version wrote
+	@# `command -v gitleaks && gitleaks detect || echo "not installed"`, which
+	@# reports success when gitleaks runs and *finds a secret*: the failing
+	@# scan falls to the `||` branch and the echo exits 0. A local secret scan
+	@# that goes green on a finding is worse than none, so absence is a
+	@# refusal with the remedy, and presence lets the tool speak for itself.
+	@command -v gitleaks >/dev/null 2>&1 || { \
+		echo "gitleaks is not installed. CI pins 8.18.4; see .github/workflows/ci.yml"; \
+		exit 1; }
+	gitleaks detect --source . --redact --no-banner --verbose
+	@$(PYTHON) -m pip_audit --version >/dev/null 2>&1 || { \
+		echo "pip-audit is not installed. Run: $(PYTHON) -m pip install pip-audit"; \
+		exit 1; }
+	$(PYTHON) -m pip_audit --strict --progress-spinner=off .
+
+gate: lint conventions coverage resolver-coverage mutation schema schemas-current \
+      magic-values hard-rules docs secrets-allowlist ## Every gate needing no external binary.
+	@echo 'Passed every gate that needs no external binary. `make gate-all` adds the'
+	@echo 'gitleaks and pip-audit scans, which CI also blocks on.'
+
+gate-all: gate security ## Every blocking CI job, including the external scans.
+	@echo 'Passed every blocking gate, including the security scans.'
 
 clean: ## Remove caches and coverage artefacts.
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov coverage.xml

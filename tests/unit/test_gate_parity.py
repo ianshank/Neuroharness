@@ -71,13 +71,119 @@ def test_both_files_exist_and_name_test_modules() -> None:
     )
 
 
-@pytest.mark.parametrize("module", sorted(_named_test_modules(_read(_WORKFLOW))))
-def test_every_module_ci_blocks_on_is_reachable_from_make_gate(module: str) -> None:
-    """Workflow ⊆ Makefile, one case per module so the failure names the gap."""
+#: `target: prereq prereq ## comment` at the start of a line. `.PHONY` and
+#: pattern rules are filtered out by the caller.
+_TARGET_RULE_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?P<target>[a-z][a-z0-9-]*):(?P<prereqs>[^=#\n]*)", re.MULTILINE
+)
+
+#: The aggregate that must cover every blocking CI job.
+_AGGREGATE_TARGET: Final[str] = "gate-all"
+
+
+def _prerequisites(makefile: str) -> dict[str, list[str]]:
+    """target -> its declared prerequisites, with line continuations joined."""
+    joined = makefile.replace("\\\n", " ")
+    graph: dict[str, list[str]] = {}
+    for match in _TARGET_RULE_RE.finditer(joined):
+        prereqs = match.group("prereqs").split("##")[0].split()
+        graph[match.group("target")] = prereqs
+    return graph
+
+
+def _recipe_lines(makefile: str, target: str) -> list[str]:
+    """The tab-indented recipe of one target."""
+    joined = makefile.replace("\\\n", " ")
+    lines = joined.splitlines()
+    out: list[str] = []
+    collecting = False
+    for line in lines:
+        rule = _TARGET_RULE_RE.match(line)
+        if rule is not None:
+            collecting = rule.group("target") == target
+            continue
+        if collecting and line.startswith("\t"):
+            out.append(line)
+        elif collecting and line.strip() and not line.startswith("\t"):
+            collecting = False
+    return out
+
+
+def _closure_commands(makefile: str, root: str) -> str:
+    """Every recipe line reachable from ``root`` through its prerequisites.
+
+    This is what ``make <root>`` would actually run, computed from the
+    dependency graph rather than from the file as a whole. Static parsing
+    rather than shelling out to ``make -n``: it needs no subprocess and no
+    ``make`` on the runner, and it is the choice ``test_mutation_fixtures.py``
+    already makes and justifies for its own collection -- a source-level answer
+    stays true whether or not the tool was available.
+    """
+    graph = _prerequisites(makefile)
+    seen: set[str] = set()
+    stack = [root]
+    commands: list[str] = []
+    while stack:
+        target = stack.pop()
+        if target in seen or target not in graph:
+            continue
+        seen.add(target)
+        commands.extend(_recipe_lines(makefile, target))
+        stack.extend(graph[target])
+    return "\n".join(commands)
+
+
+def test_the_aggregate_target_exists_and_reaches_several_targets() -> None:
+    """Guard on the guard: the closure is computed, not empty."""
     makefile = _read(_MAKEFILE)
-    assert module in makefile, (
-        f"{module} is named by a CI job and by no Makefile target, so `make gate` is "
-        "weaker than the pipeline it stands in for"
+    graph = _prerequisites(makefile)
+    assert _AGGREGATE_TARGET in graph, (
+        f"the Makefile declares no {_AGGREGATE_TARGET!r} target; the parity check below "
+        "would compare against nothing"
+    )
+    commands = _closure_commands(makefile, _AGGREGATE_TARGET)
+    # `$(PYTEST)`, not `pytest`: the recipes invoke the variable, and counting
+    # the lowercase word here would find almost nothing and report a healthy
+    # walk as a broken one.
+    invocations = commands.count("$(PYTEST)")
+    assert invocations >= 8, (
+        f"the closure of {_AGGREGATE_TARGET!r} invokes $(PYTEST) {invocations} times; "
+        "the dependency walk has broken"
+    )
+    assert len(_named_test_modules(commands)) >= 8, (
+        "the closure names too few test modules for the comparison below to mean anything"
+    )
+
+
+@pytest.mark.parametrize("module", sorted(_named_test_modules(_read(_WORKFLOW))))
+def test_every_module_ci_blocks_on_is_reachable_from_the_aggregate(module: str) -> None:
+    """Workflow ⊆ the closure of ``gate-all``, one case per module.
+
+    The assertion this module was written to make, and did not. The first
+    version checked that each CI-named module appeared *somewhere in the
+    Makefile text*, which a module used only by an unreachable target satisfies:
+    `tests/unit/test_secret_scan_allowlist.py` lived in `security`, `gate` did
+    not depend on `security`, and the check passed while `make gate` genuinely
+    did not run it. A parity test that proves less than its docstring claims is
+    the vacuity this file exists to prevent, one level up.
+    """
+    reachable = _closure_commands(_read(_MAKEFILE), _AGGREGATE_TARGET)
+    assert module in reachable, (
+        f"{module} is named by a CI job and is not reachable from `make {_AGGREGATE_TARGET}`, "
+        "so the local gate is weaker than the pipeline it stands in for"
+    )
+
+
+@pytest.mark.parametrize("module", sorted(_named_test_modules(_read(_WORKFLOW))))
+def test_every_module_ci_blocks_on_is_named_somewhere(module: str) -> None:
+    """The weaker check, kept: a module named in no target at all.
+
+    Distinct from the reachability failure above -- "named nowhere" and "named
+    in a target nothing depends on" are different mistakes with different fixes,
+    and a failure should say which one happened.
+    """
+    assert module in _read(_MAKEFILE), (
+        f"{module} is named by a CI job and by no Makefile target at all"
     )
 
 
