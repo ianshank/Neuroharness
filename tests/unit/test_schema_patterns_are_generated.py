@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Final
 
@@ -34,6 +35,9 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 from render_schema_patterns import (  # noqa: E402  - after the sys.path insert
     SCHEMA_ROOT,
+    _at,
+    _read,
+    _set,
     derived_values,
     drift,
 )
@@ -100,14 +104,63 @@ def test_every_rendered_pattern_is_a_valid_regex(schema_file: str) -> None:
         re.compile(pattern)
 
 
-def test_a_hand_edit_to_a_generated_value_is_caught() -> None:
-    """Without this, ``drift()`` returning ``[]`` could mean "clean" or "broken".
+def _tampered_reader(schema_file: str, pointer: str, mutate: Callable[[Any], Any]):
+    """A ``drift`` reader that serves one schema with one derived value altered.
 
-    Mutates a derived value in memory and asserts the comparison notices. It
-    never touches the files.
+    Reads the real file and edits the parsed copy, so the tampering is applied
+    to exactly the document ``drift`` would otherwise have read, and nothing is
+    written to disk.
+    """
+
+    def read(requested: str) -> dict[str, Any]:
+        document = _read(requested)
+        if requested == schema_file:
+            _set(document, pointer, mutate(_at(document, pointer)))
+        return document
+
+    return read
+
+
+@pytest.mark.parametrize(
+    ("pointer", "mutate", "what"),
+    [
+        ("$defs/ResourceKey", lambda node: {**node, "maxLength": node["maxLength"] + 1}, "a widened bound"),
+        ("$defs/ResourceKey", lambda node: {**node, "pattern": "^.*$"}, "a loosened pattern"),
+        ("$defs/ReasonCode/maxLength", lambda value: value + 1, "a widened scalar"),
+        ("$defs/ReasonCode/anyOf", lambda branches: branches[:-1], "a dropped alternative"),
+    ],
+)
+def test_a_hand_edit_to_a_generated_value_is_caught(
+    pointer: str, mutate: Callable[[Any], Any], what: str
+) -> None:
+    """The drift check must *report* a hand edit, not merely be capable of it.
+
+    What this replaced asserted ``tampered != expected`` on a value it had
+    just built by changing one key - true by construction, and true whatever
+    ``drift`` does. ``drift`` could have been ``return []`` and it stayed green:
+    a green check over a guard that had stopped guarding, which is the failure
+    this tool exists to catch in the schemas.
+
+    Each case is a hand edit somebody would plausibly make - widening a bound,
+    loosening a pattern, dropping a reason-code alternative - and each is a
+    loosening, because that is the direction that matters: a schema quietly
+    wider than the Python grammar accepts documents the harness will refuse.
     """
     record = "decision-record.schema.json"
-    pointer = "$defs/ResourceKey"
-    expected = derived_values()[record][pointer]
-    tampered = {**expected, "maxLength": expected["maxLength"] + 1}
-    assert tampered != expected, "the comparison would not see a changed maxLength"
+    reported = drift(_tampered_reader(record, pointer, mutate))
+    assert f"{record}#{pointer}" in reported, (
+        f"drift() did not report {what} at {pointer}; it returned {reported}. "
+        f"The check cannot distinguish a clean tree from a broken comparison."
+    )
+
+
+def test_the_checked_in_schemas_are_the_control_for_that() -> None:
+    """The same reader, untampered, reports nothing - so the cases above are the edit.
+
+    Without this, every case above could pass because ``drift`` reports
+    everything always, which is as useless as reporting nothing.
+    """
+    assert drift(_read) == [], (
+        "the checked-in schemas are already stale, so the tampering tests above "
+        "prove nothing; run python3 tools/render_schema_patterns.py"
+    )

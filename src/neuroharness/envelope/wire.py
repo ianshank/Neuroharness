@@ -45,7 +45,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from neuroharness.canonical.digest import envelope_digest, proposal_digest
-from neuroharness.models.common import Digest
+from neuroharness.models.common import Digest, freeze_document
 from neuroharness.models.envelope import ActionEnvelope
 from neuroharness.observability.logging import get_logger
 
@@ -99,10 +99,34 @@ def canonical_document(envelope: ActionEnvelope) -> Mapping[str, Any]:
     issues a token and the broker that verifies it cannot disagree about what
     the document was.
 
-    Returned read-only: a caller that mutated the mapping after digesting it
-    would hold a digest for a document it no longer has.
+    Returned **deeply** read-only: a caller that mutated the document after
+    digesting it would hold a digest for a document it no longer has.
+
+    ``MappingProxyType`` alone was not enough and read as though it were. It
+    freezes the top level and hands out the nested ``dict`` and ``list`` objects
+    ``model_dump`` built, so ``canonical_document(env)["proposal"]["arguments"]
+    ["target"] = ...`` succeeded against a mapping whose docstring promised it
+    could not - the identity-drift defect this function exists to prevent,
+    surviving one level down. It is the same shape as the frozen ``StagedRecord``
+    whose payload was editable, and ``freeze_document`` is the helper that
+    already existed for it.
+
+    The JCS canonicaliser dispatches on ``Mapping`` and ``(list, tuple)``, which
+    is what a frozen document is made of, so the digests are byte-identical to
+    the shallow rendering's.
+
+    **Thaw at the JSON boundary.** A frozen document is not ``json.dumps``-able,
+    deliberately, and that is the convention this package already runs on:
+    ``models.common`` holds documents frozen inside models and registers
+    ``thaw_document`` as the serialiser used when one is dumped. So a caller
+    writing this to a wire or handing it to a JSON Schema validator calls
+    ``thaw_document`` first, and the call is a visible act at the one place the
+    document stops being an identity and becomes bytes. Thawing rebuilds
+    containers and touches no scalar, so it cannot change what canonicalises -
+    which is asserted, not assumed, in ``test_envelope_wire.py``.
     """
-    return MappingProxyType(envelope.model_dump(**WIRE_DUMP_OPTIONS))
+    document: Mapping[str, Any] = freeze_document(envelope.model_dump(**WIRE_DUMP_OPTIONS))
+    return document
 
 
 def digests(envelope: ActionEnvelope) -> EnvelopeDigests:

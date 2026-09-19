@@ -28,6 +28,7 @@ from typing import Any, Final
 import pytest
 
 from neuroharness.envelope.arguments import (
+    _JSON_TYPES,
     SUPPORTED_KEYWORDS,
     ArgumentValidator,
     BoundedSchemaValidator,
@@ -337,3 +338,72 @@ def test_the_stripped_payload_validates_where_the_raw_one_would_not() -> None:
     proposal = Proposal.model_validate(cleaned.payload)
     assert proposal.tool == "deployment.apply"
     assert cleaned.stripped == ("actor",)
+
+
+# --- A `type` the evaluator cannot apply is a schema it cannot apply ----------
+#
+# The keyword survey checked keyword *names* and not their values, so `type`
+# passed it and then `_check`'s `_JSON_TYPES.get()` returned `None` and skipped
+# the type check for that subschema without saying so. The schema then accepted
+# arguments of every shape and reported no violations - the exact inversion of
+# ADR-0024's contract, in the module that contract is about.
+
+
+#: Values of `type` no JSON Schema author should get away with here. `int` and
+#: `str` are the typos (the JSON names are `integer` and `string`); `["string",
+#: "null"]` is *legal* JSON Schema this evaluator does not implement, which is
+#: the more dangerous case because nothing about it looks like a mistake.
+UNEVALUABLE_TYPES: Final[tuple[Any, ...]] = (
+    "int",
+    "str",
+    "float",
+    "dict",
+    "Integer",
+    "",
+    ["string", "null"],
+    123,
+    None,
+    {"$ref": "#/$defs/Thing"},
+)
+
+
+@pytest.mark.parametrize("declared", UNEVALUABLE_TYPES, ids=repr)
+def test_a_type_the_evaluator_cannot_apply_is_refused(declared: Any) -> None:
+    violations = BoundedSchemaValidator().validate({"anything": "at all"}, {"type": declared})
+    assert [v.kind for v in violations] == [ViolationKind.UNSUPPORTED_SCHEMA], (
+        f"schema {{'type': {declared!r}}} was evaluated rather than refused; "
+        f"got {violations}"
+    )
+
+
+@pytest.mark.parametrize("declared", UNEVALUABLE_TYPES, ids=repr)
+def test_a_nested_unevaluable_type_is_refused(declared: Any) -> None:
+    """The realistic shape: one property of an action class's argument schema.
+
+    A registry declaring ``{"replicas": {"type": "int"}}`` used to accept a
+    string where it had asked for a number, silently. That is a signed policy
+    document whose constraint does nothing.
+    """
+    schema = {"type": "object", "properties": {"replicas": {"type": declared}}}
+    violations = BoundedSchemaValidator().validate({"replicas": "not a number"}, schema)
+    kinds = [v.kind for v in violations]
+    assert kinds == [ViolationKind.UNSUPPORTED_SCHEMA], (
+        f"nested {{'type': {declared!r}}} was evaluated rather than refused; got {violations}"
+    )
+    assert violations[0].pointer == "/replicas", (
+        f"the refusal must name the offending subschema; got {violations[0].pointer!r}"
+    )
+
+
+@pytest.mark.parametrize("declared", sorted(_JSON_TYPES))
+def test_every_supported_type_name_still_evaluates(declared: str) -> None:
+    """The other direction, so the fix cannot be "refuse everything".
+
+    A guard that refuses the whole vocabulary passes every test above and makes
+    the evaluator useless, which is the failure mode of tightening a check only
+    against its negative cases.
+    """
+    violations = BoundedSchemaValidator().validate({}, {"type": declared})
+    assert all(v.kind is not ViolationKind.UNSUPPORTED_SCHEMA for v in violations), (
+        f"the supported JSON type {declared!r} was refused as unsupported: {violations}"
+    )

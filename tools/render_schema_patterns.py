@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Final
 
@@ -118,11 +119,23 @@ def _set(document: dict[str, Any], pointer: str, value: Any) -> None:
         node[last] = value
 
 
-def drift() -> list[str]:
-    """Pointers whose checked-in value differs from the derived one."""
+def drift(read: Callable[[str], dict[str, Any]] = _read) -> list[str]:
+    """Pointers whose checked-in value differs from the derived one.
+
+    ``read`` is injectable so the comparison itself can be tested against a
+    tampered document without writing one to disk. It defaults to reading the
+    checked-in schemas, so ``--check`` and every existing caller are unchanged.
+
+    The seam is here because the test that claimed to cover this never called
+    this function: it built a tampered value and asserted it differed from the
+    one it was built from, which is true by construction. ``drift`` could have
+    returned ``[]`` unconditionally and that test would still have passed - a
+    green check over a guard that had stopped guarding, which is the exact
+    failure this tool exists to catch in the schemas.
+    """
     stale: list[str] = []
     for schema_file, values in derived_values().items():
-        document = _read(schema_file)
+        document = read(schema_file)
         for pointer, expected in values.items():
             actual = _at(document, pointer)
             if isinstance(expected, dict):

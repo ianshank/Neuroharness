@@ -181,6 +181,34 @@ class BoundedSchemaValidator:
                     )
                 )
                 continue
+            if keyword == "type" and not self._is_evaluable_type(value):
+                # A supported keyword carrying a value this evaluator cannot
+                # act on, which the keyword survey alone does not catch. ``int``
+                # is not a JSON type name - it is the typo a schema author
+                # makes for ``integer`` - and the list form ``["string",
+                # "null"]`` is legal JSON Schema this evaluator does not
+                # implement. Both used to fall through ``_check``'s
+                # ``_JSON_TYPES.get()`` as ``None`` and disable the type check
+                # for that subschema *silently*, so the schema accepted
+                # arguments of every shape while reporting no violations.
+                #
+                # Refused here rather than repaired in ``_check`` because this
+                # is the same question the rest of this survey asks: can the
+                # whole schema be applied? A type it cannot evaluate means no,
+                # and ``ADR-0024`` says that answer is a refusal (``FR-02``).
+                found.append(
+                    ArgumentViolation(
+                        pointer=pointer or "/",
+                        kind=ViolationKind.UNSUPPORTED_SCHEMA,
+                        # The declared name when there is one: "you wrote
+                        # `int`" is the diagnostic a schema author needs. It
+                        # comes from the signed registry, not from the agent,
+                        # so naming it back does not echo model-chosen text
+                        # (``SEC-07``, ``T-11``).
+                        expectation=value if isinstance(value, str) else "type",
+                    )
+                )
+                continue
             if keyword == "properties" and isinstance(value, Mapping):
                 for name, subschema in value.items():
                     if isinstance(subschema, Mapping):
@@ -190,6 +218,18 @@ class BoundedSchemaValidator:
                             )
                         )
         return tuple(found)
+
+    @staticmethod
+    def _is_evaluable_type(value: Any) -> bool:
+        """Whether ``type``'s value names a JSON type this evaluator implements.
+
+        Deliberately the *only* predicate: ``_check`` narrows with
+        ``isinstance(declared_type, str)`` and then ``_JSON_TYPES.get()``, and
+        each of those silently skipped the check on its miss. The survey above
+        refuses both misses up front, so by the time ``_check`` runs, a present
+        ``type`` is known to be one this evaluator can apply.
+        """
+        return isinstance(value, str) and value in _JSON_TYPES
 
     # -- argument evaluation -------------------------------------------------
 

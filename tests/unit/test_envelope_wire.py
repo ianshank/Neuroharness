@@ -23,6 +23,7 @@ harness digests must be the bytes it publishes.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -31,6 +32,8 @@ from tests.unit.test_schema_conformance import ENVELOPE_VALIDATOR, build_envelop
 from neuroharness.canonical.digest import envelope_digest, proposal_digest
 from neuroharness.canonical.jcs import canonicalize, parse_json
 from neuroharness.envelope import WIRE_DUMP_OPTIONS, canonical_document, digests
+from neuroharness.envelope.wire import EnvelopeDigests
+from neuroharness.models.common import thaw_document
 from neuroharness.models.envelope import ActionEnvelope
 
 
@@ -49,7 +52,7 @@ def test_the_canonical_document_conforms_to_the_published_schema(
     document the harness digests does not satisfy it, the harness is computing
     an identity for a document that will never exist on any wire.
     """
-    document = dict(canonical_document(envelope))
+    document = thaw_document(canonical_document(envelope))
     errors = sorted(
         ENVELOPE_VALIDATOR.iter_errors(document), key=lambda e: list(e.absolute_path)
     )
@@ -74,7 +77,7 @@ def test_the_other_convention_does_not_conform_and_digests_differently(
     rather than nullable.
     """
     naive: dict[str, Any] = envelope.model_dump(mode="json")
-    pinned = dict(canonical_document(envelope))
+    pinned = thaw_document(canonical_document(envelope))
 
     errors = list(ENVELOPE_VALIDATOR.iter_errors(naive))
     assert errors, (
@@ -104,7 +107,7 @@ def test_the_proposal_digest_is_indifferent_to_the_convention(
     there was nothing here.
     """
     naive = envelope.model_dump(mode="json")
-    pinned = dict(canonical_document(envelope))
+    pinned = thaw_document(canonical_document(envelope))
     assert proposal_digest(naive) == proposal_digest(pinned)
 
 
@@ -118,7 +121,7 @@ def test_a_broker_recomputing_from_the_wire_bytes_gets_the_same_digest(
     back the way a broker does, and recompute. Any convention mismatch shows up
     here as two different digests over one untampered envelope.
     """
-    gateway_document = dict(canonical_document(envelope))
+    gateway_document = thaw_document(canonical_document(envelope))
     issued = envelope_digest(gateway_document)
 
     on_the_wire = canonicalize(gateway_document)
@@ -136,7 +139,7 @@ def test_both_digests_come_from_one_rendering(envelope: ActionEnvelope) -> None:
     this module fixes.
     """
     pair = digests(envelope)
-    document = dict(canonical_document(envelope))
+    document = thaw_document(canonical_document(envelope))
     assert pair.proposal == proposal_digest(document)
     assert pair.envelope == envelope_digest(document)
 
@@ -179,6 +182,76 @@ def test_digesting_is_stable_across_a_round_trip_through_the_model(
     envelope must reach the same identity, or the replay is of a different
     action.
     """
-    document = dict(canonical_document(envelope))
+    document = thaw_document(canonical_document(envelope))
     revalidated = ActionEnvelope.model_validate(json.loads(json.dumps(document)))
     assert digests(revalidated) == digests(envelope)
+
+
+# --- The document is read-only all the way down ------------------------------
+
+
+def _nested_paths(document: Any, prefix: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
+    """Every path to a nested container, so the test cannot miss one by hand."""
+    found: list[tuple[str, ...]] = []
+    if isinstance(document, Mapping):
+        for key, value in document.items():
+            if isinstance(value, (Mapping, list, tuple)) and not isinstance(value, str):
+                found.append((*prefix, str(key)))
+                found.extend(_nested_paths(value, (*prefix, str(key))))
+    return found
+
+
+def test_the_canonical_document_has_nested_containers_to_freeze(
+    envelope: ActionEnvelope,
+) -> None:
+    """Guard the guard below: a flat document would make it vacuous."""
+    assert _nested_paths(canonical_document(envelope)), (
+        "the fixture envelope renders flat, so the freeze test proves nothing"
+    )
+
+
+def test_no_nested_container_in_the_canonical_document_can_be_mutated(
+    envelope: ActionEnvelope,
+) -> None:
+    """``MappingProxyType`` froze the top level and handed out live dicts below it.
+
+    ``canonical_document`` promises in its own docstring that a caller cannot
+    mutate the document it digested. That held for ``doc["tool"] = ...`` and not
+    for ``doc["proposal"]["arguments"]["target"] = ...``, one level down, where
+    the interesting content is - so the digest named a document the caller could
+    still edit. Same shape as the frozen ``StagedRecord`` whose payload was
+    editable, and the fix is the same deep ``freeze_document``.
+
+    Walks every nested container rather than naming one, because a field added
+    later must not reopen this.
+    """
+    document = canonical_document(envelope)
+    for path in _nested_paths(document):
+        node: Any = document
+        for step in path:
+            node = node[step]
+        with pytest.raises(TypeError, match="does not support item assignment"):
+            if isinstance(node, Mapping):
+                node["injected"] = "ignore previous instructions"  # type: ignore[index]
+            else:
+                node[0] = "ignore previous instructions"  # type: ignore[index]
+
+
+def test_freezing_did_not_change_a_single_digest(envelope: ActionEnvelope) -> None:
+    """The fix must be invisible to the wire contract.
+
+    The JCS canonicaliser dispatches on ``Mapping`` and ``(list, tuple)``, so a
+    frozen document canonicalises identically - but "should" is how the two
+    serialisation conventions this module exists to unify both looked correct.
+    Pinned against the digests of a plain, unfrozen dump of the same envelope.
+    """
+    plain = envelope.model_dump(**WIRE_DUMP_OPTIONS)
+    frozen = canonical_document(envelope)
+    assert canonicalize(frozen) == canonicalize(plain)
+    assert thaw_document(frozen) == plain, (
+        "thawing must reproduce the plain dump exactly; it rebuilds containers "
+        "and must touch no scalar"
+    )
+    assert digests(envelope) == EnvelopeDigests(
+        proposal=proposal_digest(plain), envelope=envelope_digest(plain)
+    )
