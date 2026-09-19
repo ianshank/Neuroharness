@@ -407,3 +407,126 @@ def test_every_supported_type_name_still_evaluates(declared: str) -> None:
     assert all(v.kind is not ViolationKind.UNSUPPORTED_SCHEMA for v in violations), (
         f"the supported JSON type {declared!r} was refused as unsupported: {violations}"
     )
+
+
+# --- A supported keyword carrying a value the evaluator cannot act on --------
+#
+# The first fix closed this for `type` alone, and the ADR line it added -- "a
+# closed vocabulary is not closed until the values inside it are closed too" --
+# was written while seven other keywords still carried the hole. Each guarded
+# its value with an `isinstance` in `_check` and, on a miss, applied no
+# constraint and reported nothing. A signed registry saying `service` is
+# required, called with `{}`, produced no violation at all.
+
+
+#: Malformed values for each supported keyword, with the argument that would
+#: have slipped through. Every one returned no violations before this fix.
+MALFORMED_SCHEMAS: Final[tuple[tuple[str, dict[str, Any], Any], ...]] = (
+    ("properties", {"type": "object", "properties": "not-a-map"}, {"anything": 1}),
+    ("properties", {"type": "object", "properties": {"a": "not-a-subschema"}}, {"a": 1}),
+    ("required", {"required": "service"}, {}),
+    (
+        "required",
+        {"type": "object", "required": "service", "properties": {"service": {"type": "string"}}},
+        {},
+    ),
+    ("required", {"required": ["service", 7]}, {}),
+    ("enum", {"type": "string", "enum": "abc"}, "z"),
+    ("enum", {"type": "string", "enum": []}, "z"),
+    ("additionalProperties", {"type": "object", "additionalProperties": "false"}, {}),
+    ("pattern", {"type": "string", "pattern": 12345}, "anything at all"),
+    ("pattern", {"type": "string", "pattern": "([unclosed"}, "anything at all"),
+    ("minimum", {"type": "integer", "minimum": "not-a-number"}, -999),
+    ("minimum", {"type": "integer", "minimum": True}, 0),
+    ("maximum", {"type": "integer", "maximum": [1]}, 999),
+)
+
+
+@pytest.mark.parametrize(
+    ("keyword", "schema", "arguments"),
+    MALFORMED_SCHEMAS,
+    ids=[f"{kw}-{i}" for i, (kw, _, _) in enumerate(MALFORMED_SCHEMAS)],
+)
+def test_a_malformed_keyword_value_refuses_the_schema(
+    keyword: str, schema: dict[str, Any], arguments: Any
+) -> None:
+    violations = BoundedSchemaValidator().validate(arguments, schema)
+    kinds = {v.kind for v in violations}
+    assert kinds == {ViolationKind.UNSUPPORTED_SCHEMA}, (
+        f"{keyword} carrying {schema[keyword]!r} was evaluated rather than refused; "
+        f"got {violations}"
+    )
+    assert any(v.expectation == keyword for v in violations), (
+        f"the refusal must name the offending keyword {keyword!r} so an author can "
+        f"find it; got {[v.expectation for v in violations]}"
+    )
+
+
+#: The other direction. A guard that refuses everything passes every case above
+#: and makes the evaluator useless, which is the failure mode of tightening a
+#: check only against its negative cases.
+WELL_FORMED_SCHEMAS: Final[tuple[tuple[dict[str, Any], Any, ViolationKind | None], ...]] = (
+    (
+        {"type": "object", "required": ["service"], "properties": {"service": {"type": "string"}}},
+        {},
+        ViolationKind.MISSING_ARGUMENT,
+    ),
+    (
+        {"type": "object", "properties": {"n": {"type": "integer", "minimum": 1}}},
+        {"n": 0},
+        ViolationKind.BELOW_MINIMUM,
+    ),
+    (
+        {"type": "object", "properties": {"n": {"type": "integer", "maximum": 1}}},
+        {"n": 9},
+        ViolationKind.ABOVE_MAXIMUM,
+    ),
+    ({"type": "string", "pattern": "^a+$"}, "bbb", ViolationKind.PATTERN_MISMATCH),
+    ({"type": "string", "enum": ["a", "b"]}, "z", ViolationKind.NOT_IN_ENUM),
+    ({"type": "object", "additionalProperties": False}, {"x": 1}, ViolationKind.UNDECLARED_ARGUMENT),
+    ({"type": "object", "properties": {"s": {"type": "string"}}}, {"s": "fine"}, None),
+)
+
+
+@pytest.mark.parametrize(("schema", "arguments", "expected"), WELL_FORMED_SCHEMAS)
+def test_a_well_formed_keyword_still_does_its_job(
+    schema: dict[str, Any], arguments: Any, expected: ViolationKind | None
+) -> None:
+    violations = BoundedSchemaValidator().validate(arguments, schema)
+    kinds = [v.kind for v in violations]
+    assert ViolationKind.UNSUPPORTED_SCHEMA not in kinds, (
+        f"a well-formed schema was refused as unsupported: {violations}"
+    )
+    if expected is None:
+        assert not violations, f"valid arguments produced {violations}"
+    else:
+        assert expected in kinds, f"expected {expected}, got {kinds}"
+
+
+def test_every_supported_keyword_has_a_declared_value_shape() -> None:
+    """The two tables are one vocabulary, and a keyword in only one is the hole.
+
+    Import already asserts this, so a disagreement is a startup failure rather
+    than a wrong answer. Restated as a test because an import-time check that
+    nobody has ever seen fail is indistinguishable from one that cannot.
+    """
+    from neuroharness.envelope.arguments import (
+        _KEYWORD_SHAPES,
+        _assert_every_supported_keyword_has_a_shape,
+    )
+
+    assert set(_KEYWORD_SHAPES) == set(SUPPORTED_KEYWORDS)
+    _assert_every_supported_keyword_has_a_shape()
+
+
+def test_the_vocabulary_check_fails_when_the_tables_disagree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guard the guard: prove the import-time assertion can actually fire."""
+    from neuroharness.envelope import arguments as module
+
+    monkeypatch.setattr(
+        module, "SUPPORTED_KEYWORDS", SUPPORTED_KEYWORDS | {"minLength"}, raising=True
+    )
+    with pytest.raises(module.UnsupportedSchemaVocabularyError, match="minLength"):
+        module._assert_every_supported_keyword_has_a_shape()

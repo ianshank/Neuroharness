@@ -82,7 +82,12 @@ store's existing duplicate refusal *is* the at-most-once insert.
 - **`model_copy(update=…)` bypassed every validator on every model.** `frozen=True`
   reads as "cannot be changed"; it wasn't. `proposal.model_copy(update={"tool":
   "ignore previous instructions"})` produced a `Proposal` whose tool was a
-  sentence, and it digested that way.
+  sentence, and it digested that way. The first fix put the override on
+  `WireModel` and this entry claimed it covered the package — **it covered two
+  of five trees.** Eight frozen models inherited `BaseModel` directly and kept
+  the hole, including both token models and the whole signed registry. It is now
+  one base, `RevalidatingModel`, with a test that walks the package and fails on
+  any frozen model that does not inherit it.
 - **Two live conventions for serializing an envelope**, producing different
   envelope digests. `mode="json"` fails the published schema on a stale fact's
   nulls. A gateway digesting a raw dump would hand the broker a digest it cannot
@@ -109,14 +114,14 @@ Every CI job run with its own command, not an approximation:
 | Gate | Result |
 |---|---|
 | Lint (`ruff`, `mypy --strict`) | **0 / 0** — was 173 and 48 |
-| Tests + coverage floor | **2598 passed**, 98.96% (floor 90%) |
+| Tests + coverage floor | **2709 passed**, 99.01% (floor 90%) |
 | Mutation kill run + fixture registry | pass |
 | Schema conformance, render drift | pass, in sync |
 | No-magic-values | pass |
 | Hard-rule register | pass (17 known gaps, counted) |
 | Docs: spec IDs, ADR index, scenarios | pass |
 | `pip-audit` | no known vulnerabilities |
-| `gitleaks` (history, 38 commits) | pass, after the two findings below |
+| `gitleaks` (history) | pass, after the two findings below |
 
 That QA run found two real defects, and missed a third until CI ran.
 

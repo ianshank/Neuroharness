@@ -32,7 +32,7 @@ import re
 from collections.abc import Collection, Mapping
 from typing import Annotated, Any, Final
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from neuroharness.errors import RegistryValidationError
 from neuroharness.grammar import (
@@ -42,7 +42,11 @@ from neuroharness.grammar import (
     RESOURCE_KIND_SOURCE,
     anchored,
 )
-from neuroharness.models.common import FrozenMappingSerializer, FrozenMappingValidator
+from neuroharness.models.common import (
+    FrozenMappingSerializer,
+    FrozenMappingValidator,
+    RevalidatingModel,
+)
 
 __all__ = [
     "RESOURCE_KEY_PATTERN",
@@ -187,7 +191,7 @@ def render_template(
     return rendered
 
 
-class ResourceKeyRegistry(BaseModel):
+class ResourceKeyRegistry(RevalidatingModel):
     """The canonical enumerations every action class shares (``FR-34``).
 
     Signed and versioned alongside the action-class registry. Keys of

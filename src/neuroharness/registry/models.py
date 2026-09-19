@@ -32,7 +32,6 @@ from enum import Enum
 from typing import Any, Final
 
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Field,
     PrivateAttr,
@@ -49,6 +48,7 @@ from neuroharness.models.common import (
     EffectClass,
     FrozenJsonMapping,
     Mode,
+    RevalidatingModel,
 )
 from neuroharness.reason import ESCALATABLE_REASONS, ReasonName
 from neuroharness.registry.resource_keys import (
@@ -107,7 +107,7 @@ class BatchPolicy(str, Enum):
     ALL_OR_NOTHING = "all_or_nothing"
 
 
-class FactRequirement(BaseModel):
+class FactRequirement(RevalidatingModel):
     """A fact the class needs, and how fresh it must be (``FR-30``, ``FR-11``).
 
     ``key`` names the *arguments* that identify the fact instance, so a CI
@@ -153,7 +153,7 @@ class FactRequirement(BaseModel):
         return self
 
 
-class CriticRef(BaseModel):
+class CriticRef(RevalidatingModel):
     """One critic the class runs, and the requirement it encodes (``FR-32``).
 
     ``source_requirement`` is mandatory. Constitution Article V asks of every
@@ -186,7 +186,7 @@ class CriticRef(BaseModel):
     certified_model: str | None = None
 
 
-class ActionClass(BaseModel):
+class ActionClass(RevalidatingModel):
     """Everything policy knows about one ``(tool, intent)`` pair (``FR-30``).
 
     Structurally satisfies the resolver's ``ClassPolicy`` protocol: it exposes
@@ -534,7 +534,7 @@ class ActionClass(BaseModel):
         return render_template(self.resource_key_template, arguments, enumerations)
 
 
-class ActionClassRegistry(BaseModel):
+class ActionClassRegistry(RevalidatingModel):
     """A loaded, verified action-class registry (``FR-30``, ``FR-33``).
 
     ``digest`` is the identity the decision record cites, so an auditor can say

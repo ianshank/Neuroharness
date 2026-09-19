@@ -36,7 +36,7 @@ JSON Schema implementation later means registering one, not editing callers.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Final, Protocol, runtime_checkable
@@ -52,6 +52,17 @@ __all__ = [
 ]
 
 _LOG: Final = get_logger("neuroharness.envelope")
+
+
+class UnsupportedSchemaVocabularyError(RuntimeError):
+    """The keyword vocabulary and the value-shape table disagree.
+
+    Raised at import, not at evaluation. A ``RuntimeError`` rather than a
+    ``FailClosedError`` for the same reason ``grammar.py`` uses one: this module
+    is imported by the envelope layer, and reaching for ``errors`` here would
+    close an import cycle. There is nothing to fail closed *about* yet - the
+    process has not started.
+    """
 
 _EVENT_UNSUPPORTED: Final[str] = "envelope.schema_unsupported"
 
@@ -88,6 +99,85 @@ _JSON_TYPES: Final[Mapping[str, tuple[type, ...]]] = {
     "boolean": (bool,),
     "null": (type(None),),
 }
+
+
+def _is_json_type(value: Any) -> bool:
+    return isinstance(value, str) and value in _JSON_TYPES
+
+
+def _is_subschema_map(value: Any) -> bool:
+    return isinstance(value, Mapping) and all(
+        isinstance(name, str) and isinstance(sub, Mapping) for name, sub in value.items()
+    )
+
+
+def _is_name_list(value: Any) -> bool:
+    # `str` is a sequence of characters, so `{"required": "service"}` would
+    # iterate as `s`, `e`, `r`... A check that reads a string as a list of
+    # names is worse than one that refuses it.
+    return isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value)
+
+
+def _is_enum(value: Any) -> bool:
+    # Non-empty, because `{"enum": []}` accepts nothing and is a schema whose
+    # author meant something else.
+    return isinstance(value, (list, tuple)) and len(value) > 0
+
+
+def _is_bool(value: Any) -> bool:
+    return isinstance(value, bool)
+
+
+def _is_regex(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        re.compile(value)
+    except re.error:
+        # A pattern that does not compile is a constraint that cannot be
+        # applied, which is this module's definition of a refusal - not an
+        # exception to raise out of a survey.
+        return False
+    return True
+
+
+def _is_number(value: Any) -> bool:
+    # `bool` is an `int` in Python; a bound of `True` is a schema mistake.
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+#: The value shape each supported keyword must carry for this evaluator to act
+#: on it. Keyed by the same frozenset above, and checked to be total at import,
+#: because a keyword added to ``SUPPORTED_KEYWORDS`` without an entry here would
+#: be a keyword whose value nobody validates - the exact hole this table closes.
+#:
+#: Every one of these was a silent skip. `_check` guarded each keyword with an
+#: `isinstance` and, on a miss, simply did not apply that constraint and
+#: reported nothing: `{"required": "service"}` skipped the required check,
+#: `{"pattern": 12345}` skipped the pattern, `{"minimum": "x"}` skipped the
+#: bound. A signed registry's constraint that silently does nothing is worse
+#: than no constraint, because the document says it is enforced.
+_KEYWORD_SHAPES: Final[Mapping[str, Callable[[Any], bool]]] = {
+    "type": _is_json_type,
+    "properties": _is_subschema_map,
+    "required": _is_name_list,
+    "enum": _is_enum,
+    "additionalProperties": _is_bool,
+    "pattern": _is_regex,
+    "minimum": _is_number,
+    "maximum": _is_number,
+}
+
+
+def _assert_every_supported_keyword_has_a_shape() -> None:
+    """A keyword with no shape entry is a keyword whose value nobody checks."""
+    missing = SUPPORTED_KEYWORDS - set(_KEYWORD_SHAPES)
+    extra = set(_KEYWORD_SHAPES) - SUPPORTED_KEYWORDS
+    if missing or extra:
+        raise UnsupportedSchemaVocabularyError(
+            f"SUPPORTED_KEYWORDS and _KEYWORD_SHAPES disagree: "
+            f"{sorted(missing)} have no shape, {sorted(extra)} shape nothing supported"
+        )
 
 
 class ViolationKind(str, Enum):
@@ -181,7 +271,7 @@ class BoundedSchemaValidator:
                     )
                 )
                 continue
-            if keyword == "type" and not self._is_evaluable_type(value):
+            if not _KEYWORD_SHAPES[keyword](value):
                 # A supported keyword carrying a value this evaluator cannot
                 # act on, which the keyword survey alone does not catch. ``int``
                 # is not a JSON type name - it is the typo a schema author
@@ -194,18 +284,25 @@ class BoundedSchemaValidator:
                 #
                 # Refused here rather than repaired in ``_check`` because this
                 # is the same question the rest of this survey asks: can the
-                # whole schema be applied? A type it cannot evaluate means no,
+                # whole schema be applied? A value it cannot act on means no,
                 # and ``ADR-0024`` says that answer is a refusal (``FR-02``).
                 found.append(
                     ArgumentViolation(
                         pointer=pointer or "/",
                         kind=ViolationKind.UNSUPPORTED_SCHEMA,
-                        # The declared name when there is one: "you wrote
-                        # `int`" is the diagnostic a schema author needs. It
-                        # comes from the signed registry, not from the agent,
-                        # so naming it back does not echo model-chosen text
-                        # (``SEC-07``, ``T-11``).
-                        expectation=value if isinstance(value, str) else "type",
+                        # The keyword whose value is wrong. Not the value
+                        # itself: a malformed one can be an arbitrary
+                        # structure, and the keyword names the site precisely
+                        # enough for a schema author to find it. ``type`` is
+                        # the exception, because "you wrote `int`" is the whole
+                        # diagnostic there and the name comes from the signed
+                        # registry rather than from the agent (``SEC-07``,
+                        # ``T-11``).
+                        expectation=(
+                            value
+                            if keyword == "type" and isinstance(value, str)
+                            else keyword
+                        ),
                     )
                 )
                 continue
@@ -218,18 +315,6 @@ class BoundedSchemaValidator:
                             )
                         )
         return tuple(found)
-
-    @staticmethod
-    def _is_evaluable_type(value: Any) -> bool:
-        """Whether ``type``'s value names a JSON type this evaluator implements.
-
-        Deliberately the *only* predicate: ``_check`` narrows with
-        ``isinstance(declared_type, str)`` and then ``_JSON_TYPES.get()``, and
-        each of those silently skipped the check on its miss. The survey above
-        refuses both misses up front, so by the time ``_check`` runs, a present
-        ``type`` is known to be one this evaluator can apply.
-        """
-        return isinstance(value, str) and value in _JSON_TYPES
 
     # -- argument evaluation -------------------------------------------------
 
@@ -355,3 +440,6 @@ class BoundedSchemaValidator:
             if name in value and isinstance(subschema, Mapping):
                 found.extend(self._check(value[name], subschema, pointer=f"{pointer}/{name}"))
         return found
+
+
+_assert_every_supported_keyword_has_a_shape()

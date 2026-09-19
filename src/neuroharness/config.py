@@ -18,10 +18,11 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import ConfigDict, Field, ValidationError, field_validator
 
 from neuroharness import defaults
 from neuroharness.errors import ConfigurationError
+from neuroharness.models.common import RevalidatingModel
 
 __all__ = ["UnregisteredClassPolicy", "SigningAlgorithm", "Settings"]
 
@@ -48,7 +49,7 @@ class SigningAlgorithm(str, Enum):
     HMAC_SHA256 = "hmac-sha256"
 
 
-class Settings(BaseModel):
+class Settings(RevalidatingModel):
     """Immutable, validated deployment settings."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")

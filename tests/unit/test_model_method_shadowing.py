@@ -47,19 +47,27 @@ DELIBERATE_OVERRIDES: Final[frozenset[str]] = frozenset(
         # hook is for. Overriding it means implementing pydantic's contract, not
         # borrowing its name for something else.
         "model_post_init",
-        # ``WireModel`` re-validates a copy. Same signature, same meaning, one
-        # added guarantee: ``BaseModel.model_copy(update=...)`` writes values
-        # into the copy without running a single validator, so
+        # ``RevalidatingModel`` re-validates a copy. Same signature, same
+        # meaning, one added guarantee: ``BaseModel.model_copy(update=...)``
+        # writes values into the copy without running a single validator, so
         # ``proposal.model_copy(update={"tool": "<a sentence>"})`` produced a
         # Proposal whose tool was prose - past ``extra="forbid"``, past every
         # field constraint, past the ``SEC-07`` shape checks - and it serialised
         # and digested exactly like that. ``frozen=True`` made it look
         # impossible, which is why nobody looked.
         #
-        # Declared once here, on the base, so every model in the package
-        # inherits the fix. Scoped, because a model that overrode ``model_copy``
-        # to mean something *else* is exactly what this file is for catching.
-        "WireModel.model_copy",
+        # Declared once here, on the one base, so every frozen model in the
+        # package inherits the fix. It sat on ``WireModel`` first, which covered
+        # the envelope and record trees and left eight frozen models - both
+        # token models, the signed-registry set and ``Settings`` - inheriting
+        # ``BaseModel`` directly and keeping the hole.
+        #
+        # Scoped to the base by name, and deliberately *not* widened to
+        # ``model_copy`` anywhere: a model that overrides ``model_copy`` to mean
+        # something else is exactly what this file exists to catch, and
+        # ``test_model_copy_revalidates.py`` requires every frozen model to
+        # inherit this one rather than write its own.
+        "RevalidatingModel.model_copy",
     }
 )
 
@@ -161,7 +169,7 @@ def test_a_scoped_override_licenses_only_the_class_it_names() -> None:
     method; only the one the entry names is allowed to.
     """
 
-    class WireModel(BaseModel):
+    class RevalidatingModel(BaseModel):
         def model_copy(self, *, update: object = None, deep: bool = False) -> BaseModel:
             return self
 
@@ -169,7 +177,7 @@ def test_a_scoped_override_licenses_only_the_class_it_names() -> None:
         def model_copy(self, *, update: object = None, deep: bool = False) -> BaseModel:
             return self
 
-    assert not _collisions(WireModel)
+    assert not _collisions(RevalidatingModel)
     assert _collisions(Other) == {"model_copy"}
 
 

@@ -24,10 +24,10 @@ import json
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from neuroharness.config import SigningAlgorithm
-from neuroharness.models.common import Digest, Mode, Verdict
+from neuroharness.models.common import Digest, Mode, RevalidatingModel, Verdict
 
 __all__ = [
     "DecisionToken",
@@ -72,7 +72,7 @@ def _isoformat(value: datetime) -> str:
     return _utc(value).isoformat().replace("+00:00", "Z")
 
 
-class DecisionToken(BaseModel):
+class DecisionToken(RevalidatingModel):
     """A signed authorisation to execute exactly one evaluated envelope.
 
     Frozen because a token is evidence: the object the broker verifies must be
@@ -168,7 +168,7 @@ class DecisionToken(BaseModel):
         return self.verdict.permits_execution
 
 
-class SignedToken(BaseModel):
+class SignedToken(RevalidatingModel):
     """A token together with the signature that travels beside it.
 
     The split exists so that :class:`DecisionToken` can be recorded, logged and
