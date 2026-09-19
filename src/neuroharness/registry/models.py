@@ -27,11 +27,11 @@ sharing an import.
 
 from __future__ import annotations
 
+from collections.abc import Collection, Iterator, Mapping
 from enum import Enum
-from typing import Any, Collection, Final, Iterator, Mapping
+from typing import Any, Final
 
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Field,
     PrivateAttr,
@@ -48,6 +48,7 @@ from neuroharness.models.common import (
     EffectClass,
     FrozenJsonMapping,
     Mode,
+    RevalidatingModel,
 )
 from neuroharness.reason import ESCALATABLE_REASONS, ReasonName
 from neuroharness.registry.resource_keys import (
@@ -106,7 +107,7 @@ class BatchPolicy(str, Enum):
     ALL_OR_NOTHING = "all_or_nothing"
 
 
-class FactRequirement(BaseModel):
+class FactRequirement(RevalidatingModel):
     """A fact the class needs, and how fresh it must be (``FR-30``, ``FR-11``).
 
     ``key`` names the *arguments* that identify the fact instance, so a CI
@@ -125,7 +126,7 @@ class FactRequirement(BaseModel):
     escalatable: bool = False
 
     @model_validator(mode="after")
-    def _check_escalation(self) -> "FactRequirement":
+    def _check_escalation(self) -> FactRequirement:
         """Rule (j): a required fact may never be escalatable (section 5.5).
 
         Section 5.5 permits ``FACT_MISSING``/``FACT_STALE`` escalation only for
@@ -145,14 +146,14 @@ class FactRequirement(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_key_arguments(self) -> "FactRequirement":
+    def _check_key_arguments(self) -> FactRequirement:
         """Key components must be argument names, not free strings (``FR-14``)."""
         if len(set(self.key)) != len(self.key):
             raise ValueError(f"fact {self.name!r} has a duplicated key component")
         return self
 
 
-class CriticRef(BaseModel):
+class CriticRef(RevalidatingModel):
     """One critic the class runs, and the requirement it encodes (``FR-32``).
 
     ``source_requirement`` is mandatory. Constitution Article V asks of every
@@ -185,7 +186,7 @@ class CriticRef(BaseModel):
     certified_model: str | None = None
 
 
-class ActionClass(BaseModel):
+class ActionClass(RevalidatingModel):
     """Everything policy knows about one ``(tool, intent)`` pair (``FR-30``).
 
     Structurally satisfies the resolver's ``ClassPolicy`` protocol: it exposes
@@ -223,7 +224,9 @@ class ActionClass(BaseModel):
     mode: Mode
     approvable: bool = False
     escalate_on: frozenset[ReasonName] = frozenset()
-    repair_budget: int = Field(default=defaults.DEFAULT_REPAIR_BUDGET, ge=0, le=defaults.MAX_REPAIR_BUDGET)
+    repair_budget: int = Field(
+        default=defaults.DEFAULT_REPAIR_BUDGET, ge=0, le=defaults.MAX_REPAIR_BUDGET
+    )
 
     # -- approval and execution -----------------------------------------------
     approver_groups: tuple[str, ...] = ()
@@ -234,7 +237,7 @@ class ActionClass(BaseModel):
     # -- validation -----------------------------------------------------------
 
     @model_validator(mode="after")
-    def _check_escalation_reasons(self) -> "ActionClass":
+    def _check_escalation_reasons(self) -> ActionClass:
         """Rule (a): ``escalate_on`` is a subset of ``ESCALATABLE_REASONS``.
 
         Section 5.5 fixes the escalatable set to ``SOLVER_UNKNOWN``,
@@ -254,7 +257,7 @@ class ActionClass(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_escalation_requires_approvability(self) -> "ActionClass":
+    def _check_escalation_requires_approvability(self) -> ActionClass:
         """Rule (b): ``escalate_on`` must be empty on a non-approvable class.
 
         ``FR-33`` names this as the loader's job. Escalation means "turn this
@@ -271,7 +274,7 @@ class ActionClass(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_escalatable_facts_exist(self) -> "ActionClass":
+    def _check_escalatable_facts_exist(self) -> ActionClass:
         """Rule (b2): fact escalation needs at least one escalatable fact.
 
         Section 5.5 allows ``FACT_MISSING``/``FACT_STALE`` escalation only for
@@ -289,7 +292,7 @@ class ActionClass(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_critic_modes(self) -> "ActionClass":
+    def _check_critic_modes(self) -> ActionClass:
         """Rule (c): ``halted`` is a class-level lever, never a critic's mode.
 
         The class mode is **not** a ceiling on critic modes. Section 5.3 step 0
@@ -329,7 +332,7 @@ class ActionClass(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_effect_class_policy(self) -> "ActionClass":
+    def _check_effect_class_policy(self) -> ActionClass:
         """Rules (f) and (g): effect class constrains approvability (``FR-35``).
 
         (f) ``none``/``read`` classes take the policy-only fast path. They are
@@ -364,7 +367,7 @@ class ActionClass(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_approvability_consistency(self) -> "ActionClass":
+    def _check_approvability_consistency(self) -> ActionClass:
         """An approvable class names who may approve it (``FR-42``).
 
         Approval is only a control if the approver set is bounded and recorded.
@@ -378,7 +381,7 @@ class ActionClass(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_argument_schema(self) -> "ActionClass":
+    def _check_argument_schema(self) -> ActionClass:
         """Rule (h): the argument schema must be closed (``FR-02``).
 
         ``FR-02`` requires ``additionalProperties: false``. An open schema means
@@ -404,7 +407,7 @@ class ActionClass(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_resource_key_template(self) -> "ActionClass":
+    def _check_resource_key_template(self) -> ActionClass:
         """Rule (k): a template may only reference declared arguments (``FR-34``).
 
         The rendered key is the broker's lease identity (``FR-25``). A
@@ -433,7 +436,7 @@ class ActionClass(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_unique_names(self) -> "ActionClass":
+    def _check_unique_names(self) -> ActionClass:
         """Critic ids and fact names are reason-code subjects, so they must be unique.
 
         ``SOLVER_TIMEOUT:<critic_id>`` and ``FACT_STALE:<fact>`` (section 5.6)
@@ -531,7 +534,7 @@ class ActionClass(BaseModel):
         return render_template(self.resource_key_template, arguments, enumerations)
 
 
-class ActionClassRegistry(BaseModel):
+class ActionClassRegistry(RevalidatingModel):
     """A loaded, verified action-class registry (``FR-30``, ``FR-33``).
 
     ``digest`` is the identity the decision record cites, so an auditor can say
@@ -572,7 +575,7 @@ class ActionClassRegistry(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _index_classes(self) -> "ActionClassRegistry":
+    def _index_classes(self) -> ActionClassRegistry:
         """Rule (i): reject duplicate ``(tool, intent)`` pairs.
 
         ``FR-30`` makes ``(tool, intent)`` the identity of an action class. With
@@ -593,7 +596,7 @@ class ActionClassRegistry(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_resource_keys(self) -> "ActionClassRegistry":
+    def _check_resource_keys(self) -> ActionClassRegistry:
         """Every declared template must render against the shared enumerations.
 
         Checked at load rather than at dispatch: a template that names a

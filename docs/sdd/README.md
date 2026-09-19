@@ -24,9 +24,10 @@ In 2026 most implementation work on a project like this will be done by humans d
 | `04-threat-model.md` | v0.2 — needs human security review | Security lead | 2026-09-18 |
 | `05-evaluation-plan.md` | v0.2 | Evaluation lead | 2026-09-18 |
 | `06-delivery-and-governance.md` | v0.2 | Delivery lead | 2026-09-18 |
-| `adr/` | ADR-0001..0019; 0007, 0008, 0009, 0010 superseded | Tech lead | 2026-09-18 |
+| `adr/` | ADR-0001..0022; 0007, 0008, 0009, 0010 superseded | Tech lead | 2026-09-18 |
 | `schemas/*.schema.json` | v1.1 | Tech lead | 2026-09-18 |
 | `07-increment-1-plan.md` | Revised after peer review; implementation in progress | Tech lead | 2026-09-18 |
+| `09-fact-provider-specification.md` | v0.1 — closes `P0-06`, unblocks `P1-18` | Tech lead + Security lead | 2026-09-18 |
 
 Both review rounds are in `../review/`: round 1 reviewed the research, round 2 reviewed the specification that answered it and re-audited round 1.
 

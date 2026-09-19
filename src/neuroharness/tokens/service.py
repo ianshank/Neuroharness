@@ -13,6 +13,14 @@ enforced by the issuance ledger rather than by caller discipline: single use is
 checked per ``token_id``, so without it two ``issue`` calls for one decision
 produce two token ids that both verify and both dispatch.
 
+The at-most-once check has a second half that is easy to miss, and the ordering
+above is only half of it. ``FR-23`` also requires the issuance to be *recorded*,
+and a claim taken here followed by a record written by the caller is two steps
+with a gap between them: the record fails, the token is rightly withheld, and
+the claim stands for a token nobody has. A caller passes ``issuance_evidence``
+to close that gap, and then the claim is the record - see
+:class:`~neuroharness.tokens.nonce.IssuanceEvidence`.
+
 *Verify* reproduces the broker's obligations in ``FR-21`` and raises a distinct
 typed error per failure, because the reason code is the record and
 ``TOKEN_INVALID`` on its own tells an operator nothing. Signature comes first:
@@ -49,14 +57,18 @@ from neuroharness.errors import (
 )
 from neuroharness.models.common import Digest, Mode, Verdict
 from neuroharness.observability.logging import get_logger
+from neuroharness.reason import ReasonCode, ReasonName
 from neuroharness.seams import Clock, IdGenerator
 from neuroharness.tokens.model import DecisionToken, SignedToken
 from neuroharness.tokens.nonce import (
     ConsumeOutcome,
     DuplicateIssuanceError,
     InMemoryIssuanceLedger,
+    IssuanceEntry,
+    IssuanceEvidence,
     IssuanceLedger,
     NonceStore,
+    RecordingIssuanceLedger,
     RevocationList,
 )
 from neuroharness.tokens.signer import Signer, verify_signature
@@ -192,6 +204,7 @@ class TokenService:
         mode: Mode,
         verdict: Verdict,
         ttl_seconds: int | None = None,
+        issuance_evidence: IssuanceEvidence | None = None,
     ) -> SignedToken:
         """Mint a token for one evaluated envelope.
 
@@ -205,6 +218,16 @@ class TokenService:
         need not match the first, so handing back the earlier token would answer
         a request for envelope *B* with an authorisation for envelope *A*
         (``ADR-0008``, ``FR-20``).
+
+        ``issuance_evidence`` is how a caller that will record the issuance
+        (``FR-23``) hands that record to the mint instead of writing it
+        afterwards. With it, the claim and the ``token_issued`` record are one
+        step: a failed write leaves no claim behind, so the decision stays
+        mintable, and a write that landed while reporting failure is caught on
+        the next attempt by the evidence itself rather than by this ledger's
+        memory. Without it the two-step path is unchanged and so is its window -
+        it is the right default only for a caller with nothing durable to do
+        after the mint.
         """
         now = self._clock.now()
         context: dict[str, Any] = {
@@ -271,19 +294,17 @@ class TokenService:
         # an atomic conditional insert placed *before* signing, so a losing
         # racer never produces a signature at all -- there is no window in which
         # two valid tokens exist for one decision, only one in which a second
-        # DecisionToken object exists unsigned and is discarded.
-        already_issued = self._issuance_ledger.claim(
-            tenant_id=tenant_id,
-            decision_id=decision_id,
-            token_id=token.token_id,
-            envelope_digest=envelope_digest,
-            now=now,
-        )
+        # DecisionToken object exists unsigned and is discarded. With evidence
+        # the same call also writes the ``token_issued`` record, so the token is
+        # signed only once its issuance is durable: ``FR-23``'s ordering becomes
+        # a property of the mint instead of an obligation on the caller.
+        already_issued = self._claim(token, now=now, evidence=issuance_evidence)
         if already_issued is not None:
             self._refuse(
                 _EVENT_DUPLICATE_ISSUE,
                 DuplicateIssuanceError,
                 "a decision token has already been issued for this decision",
+                reason_code=ReasonCode(ReasonName.DUPLICATE_ISSUANCE, token.decision_id),
                 issued_token_id=already_issued.token_id,
                 issued_envelope_digest=str(already_issued.envelope_digest),
                 issued_at=already_issued.issued_at.isoformat(),
@@ -298,6 +319,7 @@ class TokenService:
             key_alg=token.key_alg.value,
             shadow=token.shadow,
             expires_at=token.expires_at.isoformat(),
+            issuance_recorded=issuance_evidence is not None,
             **context,
         )
         return SignedToken(token=token, signature=signature)
@@ -513,11 +535,48 @@ class TokenService:
 
     # -- internals -----------------------------------------------------------
 
+    def _claim(
+        self,
+        token: DecisionToken,
+        *,
+        now: datetime,
+        evidence: IssuanceEvidence | None,
+    ) -> IssuanceEntry | None:
+        """Take the at-most-once claim, with or without its evidence.
+
+        Refuses to run rather than quietly downgrading: a caller that supplied
+        evidence asked for the one-step claim, and answering that request with
+        the two-step one would reintroduce, invisibly, the window it exists to
+        remove. :class:`~neuroharness.errors.ConfigurationError` is the right
+        shape for that - the service was assembled with a ledger that cannot do
+        what this deployment needs, which is a wiring defect and not a decision
+        outcome.
+        """
+        if evidence is None:
+            return self._issuance_ledger.claim(
+                tenant_id=token.tenant_id,
+                decision_id=token.decision_id,
+                token_id=token.token_id,
+                envelope_digest=token.envelope_digest,
+                now=now,
+            )
+        ledger = self._issuance_ledger
+        if not isinstance(ledger, RecordingIssuanceLedger):
+            raise ConfigurationError(
+                "issuance evidence was supplied, but the injected issuance ledger "
+                f"cannot claim and record as one step; a {type(ledger).__name__} "
+                "would leave a claim standing for a token whose record failed "
+                "(FR-23)"
+            )
+        return ledger.claim_recorded(token=token, evidence=evidence, now=now)
+
     def _refuse(
         self,
         event: str,
         error_type: type[FailClosedError],
         message: str,
+        *,
+        reason_code: ReasonCode | None = None,
         **fields: Any,
     ) -> NoReturn:
         """Record the refusal with its reason code, then fail closed.
@@ -525,7 +584,12 @@ class TokenService:
         Refusals are logged here and nowhere else, so no path can raise without
         leaving evidence (Constitution, Article IV). Only identifiers, digests
         and reasons are emitted; signature material is never passed in.
+
+        ``reason_code`` is supplied when the reason takes a subject. Most do not
+        and the error's own name is the whole code; ``DUPLICATE_ISSUANCE`` is
+        subjected with the decision the chain already authorises, which is the
+        first thing an operator looks for when one is refused.
         """
-        error = error_type(message)
+        error = error_type(message, reason_code=reason_code)
         self._logger.warning(event, reason=error.reason_code.render(), detail=message, **fields)
         raise error

@@ -10,13 +10,13 @@ A resource key is ``kind:id`` or a ``/``-joined path of such segments, for
 example ``service:checkout/target:production``. The grammar is deliberately
 narrow:
 
-* it is a subset of the reason-code subject charset in
-  :data:`neuroharness.reason.PARAMETERISED_REASONS` (section 5.6), because a
+* it is a subset of the reason-code subject charset (section 5.6), because a
   resource key is emitted verbatim as the subject of
   ``RESOURCE_BUSY:<resource_key>`` and ``EFFECT_MISMATCH:<resource_key>``. A key
   that cannot be rendered as a reason code is a key whose contention or effect
   mismatch could not be recorded, and an unrecorded decision was not made
-  (Constitution Art. III);
+  (Constitution Art. III). That claim used to be written here and was false in
+  both directions; it is now asserted at import in :mod:`neuroharness.grammar`;
 * it excludes ``_`` and any character outside ``[A-Za-z0-9.-]`` in identifiers
   for the same reason;
 * it is length-bounded so the rendered reason code stays inside the limit
@@ -29,12 +29,24 @@ lease identity and the registry's declared template can never drift apart.
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, Collection, Final, Mapping
+from collections.abc import Collection, Mapping
+from typing import Annotated, Any, Final
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from neuroharness.errors import RegistryValidationError
-from neuroharness.models.common import FrozenMappingSerializer, FrozenMappingValidator
+from neuroharness.grammar import (
+    MAX_RESOURCE_KEY_LENGTH,
+    RESOURCE_ID_SOURCE,
+    RESOURCE_KEY_PATTERN,
+    RESOURCE_KIND_SOURCE,
+    anchored,
+)
+from neuroharness.models.common import (
+    FrozenMappingSerializer,
+    FrozenMappingValidator,
+    RevalidatingModel,
+)
 
 __all__ = [
     "RESOURCE_KEY_PATTERN",
@@ -45,25 +57,18 @@ __all__ = [
     "render_template",
 ]
 
-#: A resource-key *kind* (the part before the colon): lowercase, hyphenated.
-_KIND = r"[a-z][a-z0-9-]{0,31}"
+# The grammar itself lives in :mod:`neuroharness.grammar`, alongside the
+# reason-code subject grammar it has to fit inside. It was spelled here, in
+# ``models/record.py``, in ``reason.py`` and in both published JSON Schemas, and
+# the four had drifted: this module admitted ``cluster-prod:svc-a`` and the
+# record model refused it, so a lease on a hyphenated resource kind could be
+# taken and never recorded. Re-exported under the names this module has always
+# used, so no caller moves.
+_KIND: Final[str] = RESOURCE_KIND_SOURCE
+_ID: Final[str] = RESOURCE_ID_SOURCE
 
-#: A resource-key *identifier* (the part after the colon). No underscore and no
-#: colon: both would make the key unparseable as a reason-code subject.
-_ID = r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}"
-
-#: ``kind:id(/kind:id)*`` -- the whole grammar, anchored.
-RESOURCE_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(
-    rf"^{_KIND}:{_ID}(?:/{_KIND}:{_ID})*$"
-)
-
-_KIND_PATTERN: Final[re.Pattern[str]] = re.compile(rf"^{_KIND}$")
-_ID_PATTERN: Final[re.Pattern[str]] = re.compile(rf"^{_ID}$")
-
-#: Upper bound on a rendered resource key. Chosen to fit inside the reason-code
-#: subject limit (section 5.6) so ``RESOURCE_BUSY:<resource_key>`` is always
-#: constructible.
-MAX_RESOURCE_KEY_LENGTH: Final[int] = 158
+_KIND_PATTERN: Final[re.Pattern[str]] = anchored(_KIND)
+_ID_PATTERN: Final[re.Pattern[str]] = anchored(_ID)
 
 #: ``{argument_name}`` placeholders in a ``resource_key_template``. Argument
 #: names follow Python identifier rules because they are envelope field names,
@@ -186,7 +191,7 @@ def render_template(
     return rendered
 
 
-class ResourceKeyRegistry(BaseModel):
+class ResourceKeyRegistry(RevalidatingModel):
     """The canonical enumerations every action class shares (``FR-34``).
 
     Signed and versioned alongside the action-class registry. Keys of
@@ -219,7 +224,7 @@ class ResourceKeyRegistry(BaseModel):
     ] = Field(default_factory=dict, validate_default=True)
 
     @model_validator(mode="after")
-    def _check_enumerations(self) -> "ResourceKeyRegistry":
+    def _check_enumerations(self) -> ResourceKeyRegistry:
         """Reject a catalogue that cannot produce well-formed keys.
 
         A malformed enumeration member is worse than a missing one: it would be
@@ -248,10 +253,18 @@ class ResourceKeyRegistry(BaseModel):
 
     # -- lookup ---------------------------------------------------------------
 
-    def validate(self, key: str) -> bool:  # noqa: A003 - the FR-34 vocabulary word
+    def is_well_formed(self, key: str) -> bool:
         """Return ``True`` when ``key`` matches ``kind:id(/kind:id)*``.
 
         Shape only, by design: see :func:`is_resource_key`.
+
+        Named ``is_well_formed`` rather than ``validate`` because
+        :class:`pydantic.BaseModel` already carries a ``validate`` classmethod
+        (deprecated, v1-compatible, returning an *instance*). Shadowing it with
+        an instance method returning ``bool`` meant a caller reaching for
+        pydantic's parsing got a shape check instead, with no error at either
+        end. No alias is kept: an alias would keep the shadow, which was the
+        defect.
         """
         return is_resource_key(key)
 

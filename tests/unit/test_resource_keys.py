@@ -47,7 +47,7 @@ def registry() -> ResourceKeyRegistry:
 )
 def test_well_formed_keys_are_accepted(registry: ResourceKeyRegistry, key: str) -> None:
     assert is_resource_key(key)
-    assert registry.validate(key)
+    assert registry.is_well_formed(key)
 
 
 @pytest.mark.parametrize(
@@ -67,7 +67,7 @@ def test_well_formed_keys_are_accepted(registry: ResourceKeyRegistry, key: str) 
 )
 def test_malformed_keys_are_rejected(registry: ResourceKeyRegistry, key: str, why: str) -> None:
     assert not is_resource_key(key), why
-    assert not registry.validate(key), why
+    assert not registry.is_well_formed(key), why
 
 
 def test_key_length_is_bounded_so_it_fits_a_reason_code() -> None:
@@ -276,7 +276,7 @@ def test_render_template_rejects_a_missing_argument() -> None:
 
 @pytest.mark.parametrize("value", [True, None, ["checkout"], {"name": "checkout"}, 1.5])
 def test_render_template_rejects_non_identifier_types(value: object) -> None:
-    with pytest.raises(RegistryValidationError, match="not a resource identifier|which is not a"):
+    with pytest.raises(RegistryValidationError, match=r"not a resource identifier|which is not a"):
         render_template("service:{service}", {"service": value}, ENUMERATIONS)
 
 
@@ -303,5 +303,5 @@ def test_render_template_rejects_a_template_that_renders_to_a_non_key() -> None:
 def test_empty_registry_enumerates_nothing_but_still_validates_shape() -> None:
     empty = ResourceKeyRegistry()
     assert empty.enumerations == {}
-    assert empty.validate("service:checkout")
+    assert empty.is_well_formed("service:checkout")
     assert empty.is_known("service:checkout")

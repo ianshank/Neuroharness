@@ -1,0 +1,11 @@
+{
+  "id": "A-35",
+  "title": "Target aliasing fails schema validation (FR-02, MUT-30)",
+  "state": "referenced",
+  "referenced_by": [
+    "tests/mutation/test_killing_fixtures.py::test_mut_30_an_uncanonical_target_never_renders_a_resource_key",
+    "tests/unit/test_registry_loader.py::test_reference_fixture_rejects_an_unenumerated_target",
+    "tests/unit/test_resource_keys.py::test_a_signed_enumeration_cannot_be_widened_in_place",
+    "tests/unit/test_resource_keys.py::test_render_template_rejects_a_value_outside_the_enumeration"
+  ]
+}

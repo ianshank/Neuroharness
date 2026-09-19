@@ -32,9 +32,10 @@ index that does not verify (``FR-56``, ``SEC-07``).
 from __future__ import annotations
 
 import hmac
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Final, Mapping, Sequence
+from typing import Any, Final
 
 from neuroharness.canonical.digest import digest_value
 from neuroharness.errors import ConfigurationError, FailClosedError

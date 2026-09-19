@@ -1,0 +1,6 @@
+{
+  "id": "A-05",
+  "title": "Failed CI is denied (WF-04, MUT-05)",
+  "state": "not_executable",
+  "owed_by": "P1-15"
+}

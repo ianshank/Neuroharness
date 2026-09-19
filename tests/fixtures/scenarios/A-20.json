@@ -1,0 +1,7 @@
+{
+  "id": "A-20",
+  "title": "Hard critic error abstains and alerts (FR-55, section 7)",
+  "state": "not_executable",
+  "owed_by": "P1-11",
+  "note": "The alerting half is P1-13; neither exists, so the scenario cannot run end to end."
+}

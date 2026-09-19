@@ -27,11 +27,12 @@ import logging
 import re
 import sys
 import traceback
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import asdict, dataclass, replace
 from types import TracebackType
-from typing import Any, Iterator, Mapping
+from typing import Any
 
 __all__ = [
     "LogContext",

@@ -1,0 +1,6 @@
+{
+  "id": "A-28",
+  "title": "Infrastructure failure in a shadow class never executes (MUT-21)",
+  "state": "not_executable",
+  "owed_by": "P1-11"
+}

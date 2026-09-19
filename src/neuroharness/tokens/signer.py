@@ -22,8 +22,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Callable, Final, Iterable, Mapping, Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 from neuroharness.config import Settings, SigningAlgorithm
 from neuroharness.errors import ConfigurationError, TokenSignatureError

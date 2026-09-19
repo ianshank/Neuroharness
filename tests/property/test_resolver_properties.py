@@ -58,8 +58,11 @@ _DETERMINISM_RUNS: Final[int] = 50
 #: Identifiers are drawn from a small pool so that repeated ids - and therefore
 #: repeated reason codes - actually occur.
 _CRITIC_IDS: Final[tuple[str, ...]] = ("critic.a", "critic.b", "critic.c")
-_FACT_NAMES: Final[tuple[str, ...]] = ("fact.a", "fact.b")
-_RULE_ID: Final[str] = "rule.a"
+#: Real fact names from the reference registry. These were "fact.a"/"fact.b",
+#: which carry a dot; the record catalogue takes snake_case here, so a
+#: generated abstention naming one of them could not have been recorded.
+_FACT_NAMES: Final[tuple[str, ...]] = ("ci_result", "deploy_state")
+_RULE_ID: Final[str] = "WF-01"
 
 
 def _reason(name: ReasonName, subject: str = "subject.a") -> ReasonCode:
@@ -74,7 +77,7 @@ critic_outcomes = st.builds(
     effective_mode=st.sampled_from((Mode.SHADOW, Mode.ADVISORY, Mode.ENFORCE)),
     repairable=st.sampled_from((True, False, None)),
     reason=st.one_of(
-        st.none(), st.just(ReasonCode(ReasonName.MONITOR_VIOLATION, "prop.window"))
+        st.none(), st.just(ReasonCode(ReasonName.MONITOR_VIOLATION, "WF-06b"))
     ),
 )
 
@@ -157,15 +160,15 @@ def constrained_pairs(draw: st.DrawFn) -> tuple[ResolutionRequest, ResolutionReq
     )
     if mutation == "critic":
         after = replace(
-            base, critic_outcomes=base.critic_outcomes + (draw(constraining_critics),)
+            base, critic_outcomes=(*base.critic_outcomes, draw(constraining_critics))
         )
     elif mutation == "infrastructure":
         after = replace(
             base,
-            infrastructure_reasons=base.infrastructure_reasons + (draw(infrastructure_reasons),),
+            infrastructure_reasons=(*base.infrastructure_reasons, draw(infrastructure_reasons)),
         )
     elif mutation == "fact":
-        after = replace(base, fact_states=base.fact_states + (draw(constraining_facts),))
+        after = replace(base, fact_states=(*base.fact_states, draw(constraining_facts)))
     elif mutation == "rate_limit":
         after = replace(base, rate_limited=True)
     elif mutation == "approval":
@@ -309,8 +312,7 @@ def test_an_infrastructure_reason_is_never_escalated(request: ResolutionRequest)
     with_outage = replace(
         request,
         policy=replace(request.policy, mode=Mode.ENFORCE),
-        infrastructure_reasons=request.infrastructure_reasons
-        + (ReasonCode(ReasonName.POLICY_ENGINE_UNAVAILABLE),),
+        infrastructure_reasons=(*request.infrastructure_reasons, ReasonCode(ReasonName.POLICY_ENGINE_UNAVAILABLE)),
     )
     resolution = resolve(with_outage)
 

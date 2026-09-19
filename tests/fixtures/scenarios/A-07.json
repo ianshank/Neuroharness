@@ -1,0 +1,7 @@
+{
+  "id": "A-07",
+  "title": "Unknown argument fails serialization before dispatch (MUT-07)",
+  "state": "not_executable",
+  "owed_by": "P1-02",
+  "note": "The envelope builder validating arguments against the class schema."
+}

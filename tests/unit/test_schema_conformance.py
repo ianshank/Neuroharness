@@ -19,7 +19,7 @@ this module checks both directions:
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 from uuid import UUID
@@ -104,7 +104,7 @@ def as_wire(model: BaseModel) -> dict[str, Any]:
 # No clock and no UUID generator: a fixture that changes between runs cannot be
 # a golden fixture, and the evidence corpus is built from these same shapes.
 
-AT: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+AT: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
 TRACE_ID: Final[str] = "4bf92f3577b34da6a3ce929d0e0e4736"
 TENANT_ID: Final[str] = "acme"
 RESOURCE_KEY: Final[str] = "service:example-api/target:production"

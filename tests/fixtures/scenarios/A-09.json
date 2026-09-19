@@ -1,0 +1,7 @@
+{
+  "id": "A-09",
+  "title": "Token replay is refused (MUT-09)",
+  "state": "not_executable",
+  "owed_by": "P1-07",
+  "note": "The mint refuses the second consumption today; the broker half is P1-08."
+}

@@ -1,0 +1,7 @@
+{
+  "id": "A-45",
+  "title": "Monitor rejects execution without a preceding approval event (WF-06a, MUT-24, Phase 3)",
+  "state": "not_executable",
+  "owed_by": "P3-01",
+  "note": "Phase 3: the monitor and its temporal property."
+}

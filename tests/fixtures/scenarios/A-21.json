@@ -1,0 +1,7 @@
+{
+  "id": "A-21",
+  "title": "Soft critic failure never changes the verdict (section 5.3)",
+  "state": "not_executable",
+  "owed_by": "P1-04",
+  "note": "The resolver already ignores a soft critic's failure, but no critic exists that can fail, so nothing can drive the scenario."
+}

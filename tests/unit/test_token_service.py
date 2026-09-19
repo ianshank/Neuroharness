@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -36,7 +36,7 @@ from neuroharness.errors import (
     TokenVerdictMismatchError,
 )
 from neuroharness.models.common import Digest, Mode, Verdict
-from neuroharness.reason import ReasonName, TokenInvalidReason
+from neuroharness.reason import ESCALATABLE_REASONS, ReasonName, TokenInvalidReason
 from neuroharness.seams import FrozenClock, SequenceIdGenerator
 from neuroharness.tokens.model import DecisionToken, SignedToken
 from neuroharness.tokens.nonce import (
@@ -45,12 +45,14 @@ from neuroharness.tokens.nonce import (
     InMemoryIssuanceLedger,
     InMemoryNonceStore,
     InMemoryRevocationList,
+    IssuanceEntry,
+    IssuanceEvidence,
     IssuanceLedger,
 )
 from neuroharness.tokens.service import MIN_TOKEN_TTL_SECONDS, ConsumeResult, TokenService
 from neuroharness.tokens.signer import HmacSigner, MultiKeySigner
 
-START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
 TENANT = "acme"
 OTHER_TENANT = "globex"
 BROKER = "broker-1"
@@ -78,8 +80,17 @@ def digest(seed: str) -> Digest:
 #: The decision every helper mints for unless a test names another. At most one
 #: token exists per decision (``ADR-0008``), so a test that needs two tokens
 #: names two decisions.
-DECISION = "dec-0001"
-OTHER_DECISION = "dec-0002"
+#:
+#: UUIDs, not ``dec-0001``. ``DecisionToken.decision_id`` is typed as a bounded
+#: ``str`` while ``DecisionTokenRecord.decision_id`` is a ``UUID``, so the token
+#: layer accepts decision ids the record layer refuses - the same divergence
+#: ``ADR-0025`` found between the resolver and the record catalogue, one layer
+#: over. A decision minted under ``dec-0001`` could never have its issuance
+#: recorded, so these fixtures were describing a decision the harness cannot
+#: actually carry. Narrowing ``DecisionToken.decision_id`` itself is the real
+#: fix and is not made here; see the commit message.
+DECISION = "00000000-0000-0000-0000-000000000001"
+OTHER_DECISION = "00000000-0000-0000-0000-000000000002"
 
 ENVELOPE = digest("envelope")
 OTHER_ENVELOPE = digest("other-envelope")
@@ -126,6 +137,7 @@ class Harness:
         tenant_id: str = TENANT,
         decision_id: str = DECISION,
         ttl_seconds: int | None = None,
+        issuance_evidence: IssuanceEvidence | None = None,
     ) -> SignedToken:
         return self.service.issue(
             decision_id=decision_id,
@@ -137,6 +149,7 @@ class Harness:
             mode=mode,
             verdict=verdict,
             ttl_seconds=ttl_seconds,
+            issuance_evidence=issuance_evidence,
         )
 
     def verify(self, signed: SignedToken, **overrides: object) -> DecisionToken:
@@ -315,7 +328,41 @@ class TestAtMostOneTokenPerDecision:
         harness.issue(decision_id=DECISION)
         with pytest.raises(DuplicateIssuanceError) as caught:
             harness.issue(decision_id=DECISION)
-        assert caught.value.reason_code.name is ReasonName.HARNESS_UNHEALTHY
+
+        code = caught.value.reason_code
+        assert code.name is ReasonName.DUPLICATE_ISSUANCE
+        # Subjected with the decision that already holds a token: the first
+        # thing an operator looks for when a duplicate is refused is the
+        # issuance that came first.
+        assert code.subject == DECISION
+
+    def test_the_refusal_is_not_filed_as_an_outage(self, harness: Harness) -> None:
+        """Why the reason name changed, asserted rather than left to the docstring.
+
+        It used to be ``HARNESS_UNHEALTHY``, which is in
+        ``INFRASTRUCTURE_REASONS`` - so an operator dashboard and the ``NFR-21``
+        correlated-failure alert read every duplicate refusal as the harness
+        being ill, when a duplicate refusal is a control working exactly as
+        designed. Filing a working control as an outage dilutes the real outages
+        and makes the control look like a defect; it is the ``T-06`` confusion
+        the round-two review already fixed once at the class level.
+
+        The property that actually mattered survives, and it survives for a
+        different reason than it used to. Non-escalation does not come from
+        being an infrastructure reason - it comes from not being in
+        ``ESCALATABLE_REASONS``, which is the allowlist for a class's
+        ``escalate_on``. So no human can wave a second mint through, which is
+        right: nobody can vouch for authorising one decision twice.
+        """
+        harness.issue(decision_id=DECISION)
+        with pytest.raises(DuplicateIssuanceError) as caught:
+            harness.issue(decision_id=DECISION)
+
+        code = caught.value.reason_code
+        assert not code.is_infrastructure, "a working control is not an outage"
+        assert ReasonName.DUPLICATE_ISSUANCE not in ESCALATABLE_REASONS, (
+            "a second mint must never be escalatable to a human approval"
+        )
 
     @pytest.mark.mutation
     def test_two_issues_for_one_decision_cannot_both_dispatch(
@@ -403,6 +450,169 @@ class TestAtMostOneTokenPerDecision:
         minted = [signed for signed in results if signed is not None]
         assert len(minted) == 1
         assert len({signed.token.token_id for signed in minted}) == 1
+
+
+class RecordingEvidence:
+    """The ``token_issued`` record of one decision, as the mint sees it."""
+
+    def __init__(self) -> None:
+        self.holding: IssuanceEntry | None = None
+        self.writes = 0
+        self.failure: Exception | None = None
+
+    def recorded_issuance(self) -> IssuanceEntry | None:
+        return self.holding
+
+    def record_issuance(self, token: DecisionToken) -> None:
+        self.writes += 1
+        if self.failure is not None:
+            raise self.failure
+        self.holding = IssuanceEntry(
+            tenant_id=token.tenant_id,
+            decision_id=token.decision_id,
+            token_id=token.token_id,
+            envelope_digest=token.envelope_digest,
+            issued_at=token.issued_at,
+        )
+
+
+class NonRecordingLedger:
+    """An issuance ledger built to the older, narrower contract.
+
+    Present so the service's refusal to downgrade has something to refuse. It
+    satisfies :class:`IssuanceLedger` and nothing more, which is exactly the
+    ledger a deployment could still be wired with.
+    """
+
+    def __init__(self) -> None:
+        self.inner = InMemoryIssuanceLedger()
+
+    def claim(
+        self,
+        *,
+        tenant_id: str,
+        decision_id: str,
+        token_id: str,
+        envelope_digest: Digest,
+        now: datetime,
+    ) -> IssuanceEntry | None:
+        return self.inner.claim(
+            tenant_id=tenant_id,
+            decision_id=decision_id,
+            token_id=token_id,
+            envelope_digest=envelope_digest,
+            now=now,
+        )
+
+    def entry_for(self, *, tenant_id: str, decision_id: str) -> IssuanceEntry | None:
+        return self.inner.entry_for(tenant_id=tenant_id, decision_id=decision_id)
+
+
+class TestIssuanceRecordedAsTheClaim:
+    """``FR-23`` folded into the mint rather than bolted on after it (``D-5``).
+
+    ``issue`` used to take the claim on the ledger's own authority and leave the
+    caller to record the issuance afterwards. Those are two steps, and a failure
+    between them left a claim standing for a token that was never returned: the
+    ledger never purges, so the decision could never be minted again, and the
+    refusal was reported as an infrastructure reason that no human may escalate.
+    """
+
+    def test_the_record_is_written_as_part_of_the_mint(self) -> None:
+        evidence = RecordingEvidence()
+        harness = Harness()
+
+        signed = harness.issue(issuance_evidence=evidence)
+
+        assert evidence.writes == 1
+        assert evidence.holding is not None
+        assert evidence.holding.token_id == signed.token.token_id
+
+    def test_a_record_that_could_not_be_written_returns_no_token(self) -> None:
+        """``INV-05``, one record later: no evidence, no authorisation."""
+        evidence = RecordingEvidence()
+        evidence.failure = EvidenceUnavailableError("the store is down")
+        harness = Harness()
+
+        with pytest.raises(EvidenceUnavailableError):
+            harness.issue(issuance_evidence=evidence)
+
+    def test_the_outage_is_reported_as_an_outage_and_not_as_ill_health(self) -> None:
+        """``T-06``: the reason code has to name what actually happened.
+
+        The old shape reported the *next* attempt as ``HARNESS_UNHEALTHY``,
+        which is terminal and non-escalatable, so an operator reading the record
+        learned that the harness was unwell rather than that a store had blinked
+        and the decision could simply be retried.
+        """
+        evidence = RecordingEvidence()
+        evidence.failure = EvidenceUnavailableError("the store is down")
+        harness = Harness()
+
+        with pytest.raises(EvidenceUnavailableError) as caught:
+            harness.issue(issuance_evidence=evidence)
+
+        assert caught.value.reason_code.name is ReasonName.EVIDENCE_UNAVAILABLE
+
+    def test_the_decision_can_be_minted_after_the_outage_clears(self) -> None:
+        """The retry that had no test anywhere (``D-5``, increment plan §3.4)."""
+        evidence = RecordingEvidence()
+        evidence.failure = EvidenceUnavailableError("the store is down")
+        harness = Harness()
+
+        with pytest.raises(EvidenceUnavailableError):
+            harness.issue(issuance_evidence=evidence)
+
+        evidence.failure = None
+        signed = harness.issue(issuance_evidence=evidence)
+
+        assert signed.token.decision_id == DECISION
+        assert evidence.writes == 2, "the second attempt reached the store"
+        assert harness.consume(signed).permits_dispatch
+
+    @pytest.mark.mutation
+    def test_a_second_mint_is_still_refused_once_the_record_exists(self) -> None:
+        """Retryable must not mean mintable twice.
+
+        The failure mode the repair could easily have introduced: a decision
+        whose record landed is retried, nothing refuses it, and two tokens with
+        two lifetimes authorise one evaluation (``ADR-0008``).
+        """
+        evidence = RecordingEvidence()
+        harness = Harness()
+        first = harness.issue(issuance_evidence=evidence)
+
+        with pytest.raises(DuplicateIssuanceError):
+            harness.issue(issuance_evidence=evidence)
+
+        assert evidence.writes == 1
+        assert evidence.holding is not None
+        assert evidence.holding.token_id == first.token.token_id
+
+    def test_a_ledger_that_cannot_record_is_refused_rather_than_downgraded(self) -> None:
+        """Silently taking the two-step path would put the window back.
+
+        And it would put it back invisibly, in a deployment whose operator had
+        asked for the one-step path. A wiring defect is a
+        :class:`ConfigurationError` - the process should not run this way -
+        rather than a decision outcome.
+        """
+        harness = Harness(issuance_ledger=NonRecordingLedger())
+
+        with pytest.raises(ConfigurationError, match="one step"):
+            harness.issue(issuance_evidence=RecordingEvidence())
+
+    def test_the_older_two_step_path_is_unchanged(self) -> None:
+        """Backwards compatibility: no evidence, no behaviour change."""
+        ledger = InMemoryIssuanceLedger()
+        harness = Harness(issuance_ledger=ledger)
+
+        signed = harness.issue()
+
+        assert ledger.entry_for(tenant_id=TENANT, decision_id=DECISION) is not None
+        assert signed.token.decision_id == DECISION
+        with pytest.raises(DuplicateIssuanceError):
+            harness.issue()
 
 
 class TestVerify:
@@ -498,7 +708,7 @@ class TestVerify:
         # DENY - which issue() refuses to mint - is refused at the broker.
         token = DecisionToken(
             token_id="tok-forged",
-            decision_id="dec-0001",
+            decision_id=DECISION,
             envelope_digest=ENVELOPE,
             proposal_digest=PROPOSAL,
             policy_bundle_digest=BUNDLE,
@@ -840,9 +1050,11 @@ class TestEvidence:
         self, harness: Harness, caplog: pytest.LogCaptureFixture
     ) -> None:
         signed = harness.issue()
-        with caplog.at_level(logging.WARNING, logger="neuroharness.tokens"):
-            with pytest.raises(TokenDigestMismatchError):
-                harness.verify(signed, envelope_digest=OTHER_ENVELOPE)
+        with (
+            caplog.at_level(logging.WARNING, logger="neuroharness.tokens"),
+            pytest.raises(TokenDigestMismatchError),
+        ):
+            harness.verify(signed, envelope_digest=OTHER_ENVELOPE)
         refusals = [r for r in caplog.records if r.getMessage() == "token_verify_refused"]
         assert refusals
         assert refusals[-1].fields["reason"] == "TOKEN_INVALID:digest_mismatch"  # type: ignore[attr-defined]
@@ -852,9 +1064,11 @@ class TestEvidence:
     ) -> None:
         signed = harness.issue()
         harness.consume(signed)
-        with caplog.at_level(logging.WARNING, logger="neuroharness.tokens"):
-            with pytest.raises(TokenConsumedError):
-                harness.consume(signed, broker_id="broker-2")
+        with (
+            caplog.at_level(logging.WARNING, logger="neuroharness.tokens"),
+            pytest.raises(TokenConsumedError),
+        ):
+            harness.consume(signed, broker_id="broker-2")
         refusals = [r for r in caplog.records if r.getMessage() == "token_consume_refused"]
         assert refusals
         assert refusals[-1].fields["reason"] == "TOKEN_INVALID:consumed"  # type: ignore[attr-defined]

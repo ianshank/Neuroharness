@@ -1,0 +1,7 @@
+{
+  "id": "A-36",
+  "title": "Forged delegation chain is rejected (SEC-13, MUT-25)",
+  "state": "not_executable",
+  "owed_by": "P1-01a",
+  "note": "Needs session identity and delegation credentials."
+}

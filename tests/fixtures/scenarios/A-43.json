@@ -1,0 +1,7 @@
+{
+  "id": "A-43",
+  "title": "Revoked token is refused (FR-21, MUT-36)",
+  "state": "not_executable",
+  "owed_by": "P1-08",
+  "note": "The revocation list is checked at the broker, on presentation."
+}

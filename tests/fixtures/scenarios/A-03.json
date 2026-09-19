@@ -1,0 +1,6 @@
+{
+  "id": "A-03",
+  "title": "Missing human principal in delegation chain is denied (WF-03, MUT-03)",
+  "state": "not_executable",
+  "owed_by": "P1-15"
+}

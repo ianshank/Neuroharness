@@ -1,0 +1,7 @@
+{
+  "id": "A-04",
+  "title": "Missing CI evidence abstains (WF-04, MUT-04)",
+  "state": "not_executable",
+  "owed_by": "P1-18",
+  "note": "The abstention comes from the fact layer, before any policy rule is consulted."
+}

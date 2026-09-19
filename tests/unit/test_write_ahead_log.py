@@ -7,8 +7,9 @@ exactly, in order, and exactly once.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from datetime import UTC, datetime
+from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 import pytest
@@ -23,18 +24,18 @@ from neuroharness.evidence.store import (
 )
 from neuroharness.evidence.wal import (
     DEFAULT_MAX_PENDING_RECORDS,
+    AmbiguousRecordError,
     InMemoryWriteAheadLog,
     ReplayReport,
     StagedRecord,
     WriteAheadLog,
     WriteAheadLogFullError,
 )
-from neuroharness.evidence.wal import AmbiguousRecordError
 from neuroharness.reason import ReasonName
 from neuroharness.seams import DeterministicUuidGenerator, FrozenClock
 from neuroharness.version import SchemaCompatibility, SchemaKind
 
-_START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+_START = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
 _TRACE_ID = "0" * 32
 _TENANT_A = "tenant-a"
 _TENANT_B = "tenant-b"
@@ -255,7 +256,9 @@ def test_replay_restores_the_exact_records_in_order(
     assert report.appended_record_ids == tuple(record["record_id"] for record in staged)
     restored = store.read(_TENANT_A)
     assert [record["seq"] for record in restored] == [0, 1, 2]
-    for original, stored in zip(staged, restored):
+    # ``strict``: a replay that drops a record would otherwise shorten the zip
+    # and the loop would assert nothing about the missing one.
+    for original, stored in zip(staged, restored, strict=True):
         assert stored["record_id"] == original["record_id"]
         assert stored["timestamp"] == original["timestamp"]
         # Stored sequences come back as tuples: a stored record is read-only

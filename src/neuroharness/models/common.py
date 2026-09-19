@@ -9,15 +9,17 @@ evidence store be tested in isolation from one another.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Any, Final, Mapping
+from typing import Annotated, Any, Final, Self
 
-from pydantic import AfterValidator, PlainSerializer
+from pydantic import AfterValidator, BaseModel, PlainSerializer
 
 from neuroharness.defaults import DIGEST_PREFIX
 
 __all__ = [
+    "RevalidatingModel",
     "Verdict",
     "VerifierResult",
     "Mode",
@@ -391,3 +393,47 @@ class Principal(str):
         from pydantic_core import core_schema
 
         return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+
+
+# --- Copying a frozen model must be held to the standard of building one ------
+
+
+class RevalidatingModel(BaseModel):
+    """A ``BaseModel`` whose ``model_copy`` re-validates. Inherit it when frozen.
+
+    ``frozen=True`` reads as "this object cannot be changed", and
+    :meth:`pydantic.BaseModel.model_copy` is the door that leaves open: it
+    writes ``update`` straight into the new object without running a single
+    validator. So::
+
+        token.model_copy(update={"verdict": "whatever I like"})
+
+    produced a ``DecisionToken`` whose verdict was a sentence, past
+    ``extra="forbid"``, past every field constraint and past the shape checks -
+    on the model that authorises execution.
+
+    This lived on ``WireModel`` and therefore covered the envelope and record
+    trees and nothing else. **Eight** frozen models inherited ``BaseModel``
+    directly and kept the hole, among them both token models and the whole
+    signed-registry set - where an in-place edit is the ``MUT-30`` / ``T-17``
+    defect, a registry whose signature proves nothing. Fixing the two that a
+    reviewer happened to name would have left six, which is why this is a base
+    class rather than a second override.
+
+    ``test_model_copy_revalidates.py`` walks every model in the package and
+    fails on a frozen one that does not inherit this, so the next frozen model
+    cannot reopen it by being written somewhere nobody thought to look.
+    """
+
+    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
+        """Pydantic's signature and meaning, plus the validation pass.
+
+        A copy is held to the same standard as a construction. The cost is one
+        validation per copy on a path nothing in ``src/`` currently takes; the
+        alternative is a mutable object with an immutable-looking type, which is
+        the defect ``frozen`` was set to prevent.
+        """
+        copied = super().model_copy(update=update, deep=deep)
+        if update is None:
+            return copied
+        return type(self).model_validate(copied.__dict__)

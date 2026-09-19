@@ -34,13 +34,13 @@ Authoritative source: ``docs/sdd/schemas/action-envelope.schema.json``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
-from typing import Annotated, Any, Final, Mapping
+from typing import Annotated, Any, Final
 from uuid import UUID
 
 from pydantic import (
     AwareDatetime,
-    BaseModel,
     ConfigDict,
     Field,
     SerializerFunctionWrapHandler,
@@ -61,6 +61,7 @@ from neuroharness.models.common import (
     FrozenMappingValidator,
     Mode,
     Principal,
+    RevalidatingModel,
 )
 from neuroharness.reason import ESCALATABLE_REASONS, ReasonName
 from neuroharness.version import SchemaCompatibility, SchemaKind
@@ -142,7 +143,7 @@ ABSENT: Final[Absent] = Absent()
 # --- Base model --------------------------------------------------------------
 
 
-class WireModel(BaseModel):
+class WireModel(RevalidatingModel):
     """Base for every wire model in this package.
 
     ``frozen`` because an envelope that can be edited after it is digested has

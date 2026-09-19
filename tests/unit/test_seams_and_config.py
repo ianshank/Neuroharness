@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -11,7 +11,14 @@ from pydantic import ValidationError
 from neuroharness import defaults
 from neuroharness.config import Settings, SigningAlgorithm, UnregisteredClassPolicy
 from neuroharness.errors import ClockUnavailableError, ConfigurationError
-from neuroharness.seams import Clock, FrozenClock, IdGenerator, SequenceIdGenerator, SystemClock, UuidGenerator
+from neuroharness.seams import (
+    Clock,
+    FrozenClock,
+    IdGenerator,
+    SequenceIdGenerator,
+    SystemClock,
+    UuidGenerator,
+)
 
 #: Enough draws that a generator returning a constant, or cycling through a
 #: short fixed list, shows up as a duplicate rather than as luck.
@@ -19,7 +26,7 @@ UUID_SAMPLE_SIZE = 64
 
 
 def test_implementations_satisfy_their_protocols() -> None:
-    assert isinstance(FrozenClock(datetime.now(timezone.utc)), Clock)
+    assert isinstance(FrozenClock(datetime.now(UTC)), Clock)
     assert isinstance(SystemClock(), Clock)
     assert isinstance(SequenceIdGenerator(), IdGenerator)
     assert isinstance(UuidGenerator(), IdGenerator)
@@ -37,7 +44,7 @@ def test_frozen_clock_requires_an_aware_datetime() -> None:
         FrozenClock(datetime(2026, 9, 18, 12, 0, 0))
 
 
-@pytest.mark.parametrize("factory", [lambda: FrozenClock(datetime.now(timezone.utc)), SystemClock])
+@pytest.mark.parametrize("factory", [lambda: FrozenClock(datetime.now(UTC)), SystemClock])
 def test_an_unhealthy_clock_fails_rather_than_guesses(factory) -> None:
     """NFR-13: a guessed time silently revalidates stale facts and expired tokens."""
     source = factory()
@@ -55,11 +62,11 @@ def test_the_system_clock_reports_aware_utc_time_while_it_is_healthy() -> None:
     facts and expired tokens without a symptom. The production clock therefore
     returns an aware UTC value or refuses (``NFR-13``).
     """
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     observed = SystemClock().now()
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
 
-    assert observed.tzinfo is timezone.utc
+    assert observed.tzinfo is UTC
     assert before <= observed <= after
 
 

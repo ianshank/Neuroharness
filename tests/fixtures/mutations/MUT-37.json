@@ -1,0 +1,8 @@
+{
+  "id": "MUT-37",
+  "state": "reserved",
+  "phase": 1,
+  "gate": "WF-05 change record",
+  "mutation": "Production target whose change-approval fact is bound to a different (service, version, target)",
+  "expected": "DENY RULE_FAILED:WF-05"
+}

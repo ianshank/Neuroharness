@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Final
 from uuid import UUID
 
@@ -26,7 +26,7 @@ from neuroharness.evidence.chain import FIELD_RECORD_HASH, FIELD_SEQ, ChainBreak
 from neuroharness.evidence.store import InMemoryEvidenceStore
 from neuroharness.seams import DeterministicUuidGenerator, FrozenClock
 
-ANCHOR: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+ANCHOR: Final[datetime] = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
 TENANT: Final[str] = "acme"
 OTHER_TENANT: Final[str] = "globex"
 KEY_ID: Final[str] = "evidence-checkpoint-2026-09"
@@ -77,7 +77,7 @@ def truncate(store: InMemoryEvidenceStore, tenant: str = TENANT) -> None:
     threat model's actor here is someone with the database, not someone with the
     API, so the test has to be that actor.
     """
-    store._records[tenant].pop()  # noqa: SLF001 - simulating a store-level tamper
+    store._records[tenant].pop()  # reaching past the API: simulating a store-level tamper
 
 
 def test_a_healthy_chain_verifies_against_its_own_checkpoint(
@@ -193,7 +193,7 @@ def test_the_checkpoint_names_the_head_it_signed(
 
 def truncate_prefix(store: InMemoryEvidenceStore, count: int, tenant: str = TENANT) -> None:
     """Remove the first ``count`` records, reaching past the append-only API."""
-    del store._records[tenant][:count]  # noqa: SLF001 - simulating a store-level tamper
+    del store._records[tenant][:count]  # reaching past the API: simulating a store-level tamper
 
 
 def test_deleting_the_front_of_the_chain_is_caught(

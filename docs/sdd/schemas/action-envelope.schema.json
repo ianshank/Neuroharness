@@ -359,8 +359,8 @@
         "resource_key": {
           "description": "Canonical resource identifier from the resource-key registry (FR-34); leases and mutual-exclusion properties key on it.",
           "type": "string",
-          "pattern": "^[a-z][a-z0-9_]*:[A-Za-z0-9._-]+(/[a-z][a-z0-9_]*:[A-Za-z0-9._-]+)*$",
-          "maxLength": 256
+          "pattern": "^(?:(?=[^\\n]{1,158}$)[a-z][a-z0-9-]{0,31}:[A-Za-z0-9][A-Za-z0-9.-]{0,63}(?:/[a-z][a-z0-9-]{0,31}:[A-Za-z0-9][A-Za-z0-9.-]{0,63}){0,38})$",
+          "maxLength": 158
         },
         "repair_budget": {
           "type": "integer",

@@ -312,8 +312,8 @@
     },
     "ResourceKey": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_]*:[A-Za-z0-9._-]+(/[a-z][a-z0-9_]*:[A-Za-z0-9._-]+)*$",
-      "maxLength": 256
+      "pattern": "^(?:(?=[^\\n]{1,158}$)[a-z][a-z0-9-]{0,31}:[A-Za-z0-9][A-Za-z0-9.-]{0,63}(?:/[a-z][a-z0-9-]{0,31}:[A-Za-z0-9][A-Za-z0-9.-]{0,63}){0,38})$",
+      "maxLength": 158
     },
     "Scalar": {
       "anyOf": [
@@ -339,50 +339,47 @@
       "anyOf": [
         {
           "enum": [
-            "POLICY_ENGINE_UNAVAILABLE",
-            "BUNDLE_INTEGRITY_FAILED",
-            "REGISTRY_INTEGRITY_FAILED",
-            "EVIDENCE_UNAVAILABLE",
-            "CLOCK_UNAVAILABLE",
-            "MONITOR_STATE_LOST",
-            "HARNESS_UNHEALTHY",
-            "SCHEMA_INVALID",
             "ACTION_CLASS_UNREGISTERED",
+            "APPROVER_NOT_ELIGIBLE",
+            "BUNDLE_INTEGRITY_FAILED",
             "CLASS_HALTED",
+            "CLOCK_UNAVAILABLE",
+            "EVIDENCE_UNAVAILABLE",
+            "HARNESS_UNHEALTHY",
+            "MONITOR_STATE_LOST",
+            "POLICY_ENGINE_UNAVAILABLE",
+            "REGISTRY_INTEGRITY_FAILED",
             "REPAIR_BUDGET_EXHAUSTED",
             "REPAIR_RATE_LIMITED",
-            "APPROVER_NOT_ELIGIBLE"
+            "SCHEMA_INVALID"
           ]
         },
         {
-          "pattern": "^RULE_FAILED:[A-Z]{2,6}-[0-9]{2,4}[a-z]?$"
+          "pattern": "^(EFFECT_MISMATCH|RESOURCE_BUSY):(?:(?=[^\\n]{1,158}$)[a-z][a-z0-9-]{0,31}:[A-Za-z0-9][A-Za-z0-9.-]{0,63}(?:/[a-z][a-z0-9-]{0,31}:[A-Za-z0-9][A-Za-z0-9.-]{0,63}){0,38})$"
         },
         {
-          "pattern": "^(FACT_MISSING|FACT_STALE|FACT_PROVIDER_ERROR):[a-z][a-z0-9_]*$"
+          "pattern": "^BATCH_DEPENDENCY_DENIED:(?:[0-9]{1,2})$"
         },
         {
-          "pattern": "^(SOLVER_UNKNOWN|SOLVER_TIMEOUT|CRITIC_ERROR):[a-z][a-z0-9_]*(\\.[a-z0-9_-]+)*$"
+          "pattern": "^(APPROVAL_VOID|DUPLICATE_ISSUANCE|RETRY_UNRESOLVED):(?:[0-9a-f-]{36})$"
         },
         {
-          "pattern": "^(APPROVAL_REQUIRED|APPROVAL_NOT_PERMITTED):[A-Z]{2,6}-[0-9]{2,4}[a-z]?$"
+          "pattern": "^(APPROVAL_NOT_PERMITTED|APPROVAL_REQUIRED):(?:[A-Z]{2,6}-[0-9]{2,4}[a-z]?)$"
         },
         {
-          "pattern": "^APPROVAL_VOID:[0-9a-f-]{36}$"
+          "pattern": "^MONITOR_VIOLATION:(?:[A-Z]{2,6}-[0-9]{2,4}[a-z]?(?:\\.[a-z0-9_]+)?)$"
         },
         {
-          "pattern": "^MONITOR_VIOLATION:[A-Z]{2,6}-[0-9]{2,4}[a-z]?(\\.[a-z0-9_]+)?$"
+          "pattern": "^RULE_FAILED:(?:[A-Z]{2,6}-[0-9]{2,4}[a-z]?|[a-z][a-z0-9_]*(?:\\.[a-z0-9_-]+)*)$"
         },
         {
-          "pattern": "^(RESOURCE_BUSY|EFFECT_MISMATCH):[a-z][a-z0-9_]*:[A-Za-z0-9._-]+(/[a-z][a-z0-9_]*:[A-Za-z0-9._-]+)*$"
+          "pattern": "^(FACT_MISSING|FACT_PROVIDER_ERROR|FACT_STALE):(?:[a-z][a-z0-9_]*)$"
         },
         {
-          "pattern": "^RETRY_UNRESOLVED:[0-9a-f-]{36}$"
+          "pattern": "^(CRITIC_ERROR|SOLVER_TIMEOUT|SOLVER_UNKNOWN):(?:[a-z][a-z0-9_]*(?:\\.[a-z0-9_-]+)*)$"
         },
         {
-          "pattern": "^TOKEN_INVALID:(expired|consumed|digest_mismatch|verdict_mismatch|mode_mismatch|bundle_stale|revoked|signature)$"
-        },
-        {
-          "pattern": "^BATCH_DEPENDENCY_DENIED:[0-9]{1,2}$"
+          "pattern": "^TOKEN_INVALID:(?:expired|consumed|digest_mismatch|verdict_mismatch|mode_mismatch|bundle_stale|revoked|signature)$"
         }
       ]
     },

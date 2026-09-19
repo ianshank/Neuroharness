@@ -104,7 +104,7 @@ def test_infrastructure_reason_set_is_fixed_and_disjoint_from_escalatable() -> N
     )
     # The exact membership is constitutional; changing it is a specification
     # amendment, so it is pinned here rather than derived.
-    assert INFRASTRUCTURE_REASONS == frozenset(
+    assert frozenset(
         {
             ReasonName.POLICY_ENGINE_UNAVAILABLE,
             ReasonName.BUNDLE_INTEGRITY_FAILED,
@@ -117,15 +117,15 @@ def test_infrastructure_reason_set_is_fixed_and_disjoint_from_escalatable() -> N
             ReasonName.SCHEMA_INVALID,
             ReasonName.ACTION_CLASS_UNREGISTERED,
         }
-    )
+    ) == INFRASTRUCTURE_REASONS
 
 
 def test_escalatable_reason_set_is_fixed() -> None:
-    assert ESCALATABLE_REASONS == frozenset(
+    assert frozenset(
         {
             ReasonName.SOLVER_UNKNOWN,
             ReasonName.SOLVER_TIMEOUT,
             ReasonName.FACT_MISSING,
             ReasonName.FACT_STALE,
         }
-    )
+    ) == ESCALATABLE_REASONS

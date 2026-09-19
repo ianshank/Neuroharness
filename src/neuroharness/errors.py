@@ -156,8 +156,15 @@ class TokenError(FailClosedError):
     reason_name = ReasonName.TOKEN_INVALID
     token_reason: TokenInvalidReason = TokenInvalidReason.SIGNATURE
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message, reason_code=ReasonCode.token_invalid(self.token_reason))
+    def __init__(self, message: str, *, reason_code: ReasonCode | None = None) -> None:
+        # The keyword is accepted so this constructor honours the base class's
+        # contract - a caller with a better-subjected code can supply one - while
+        # the default stays the parameterised TOKEN_INVALID that makes the
+        # inherited fallback unreachable.
+        super().__init__(
+            message,
+            reason_code=reason_code or ReasonCode.token_invalid(self.token_reason),
+        )
 
 
 class TokenSignatureError(TokenError):

@@ -1,0 +1,7 @@
+{
+  "id": "A-24",
+  "title": "Concurrent deployments of one service are serialized by the lease (FR-25, WF-06c, MUT-31)",
+  "state": "not_executable",
+  "owed_by": "P1-08",
+  "note": "The broker lease is what serializes the two deployments."
+}

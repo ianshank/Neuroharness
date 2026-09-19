@@ -38,8 +38,9 @@ decide; an operator reading the record must be able to tell those apart.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, Mapping
+from typing import Final
 
 from neuroharness.errors import ConfigurationError
 from neuroharness.models.common import Verdict

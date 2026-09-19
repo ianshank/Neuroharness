@@ -1,0 +1,7 @@
+{
+  "id": "A-06",
+  "title": "Approval piggybacking is refused (WF-06a, MUT-06)",
+  "state": "not_executable",
+  "owed_by": "P1-10a",
+  "note": "Needs an approval bound to a proposal digest, which is the approval service."
+}

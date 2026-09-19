@@ -20,6 +20,20 @@ single subsystem alone:
     non-escalating infrastructure reason, no token is issued whatever the mode,
     so nothing can execute on an evaluation the harness could not complete.
 
+``FR-23`` the issuance record is the issuance claim
+    The ``token_issued`` record is not written after the mint; it is handed to
+    the mint as :class:`~neuroharness.tokens.nonce.IssuanceEvidence` and the
+    decision is claimed *by* making it durable. Writing it afterwards is two
+    steps, and the gap between them is a defect with no safe compensation: if
+    the record fails, the token is rightly withheld while the claim stands, and
+    the ledger that must never forget an issuance can never let that decision be
+    minted again. One step has no gap. Because the record's identity is derived
+    from the decision (:func:`issuance_record_id`), the store's own refusal of a
+    duplicate id is the conditional insert, the lookup that proves a decision
+    was never authorised is one call rather than a scan, and an issuance that
+    landed while reporting failure still refuses the next attempt - from the
+    chain, which cannot forget, rather than from a ledger that can.
+
 The pipeline owns the *order*, and it owns one thing more: every payload it
 writes is constructed through the typed models in
 :mod:`neuroharness.models.record` and therefore validated against
@@ -61,29 +75,36 @@ log, where it is a debugging aid and cannot be mistaken for evidence.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Final, Mapping
+from datetime import datetime
+from enum import Enum
+from typing import Any, Final
+from uuid import UUID, uuid5
 
 from pydantic import ValidationError
 
 from neuroharness.errors import FailClosedError
-from neuroharness.evidence.chain import FIELD_KIND, FIELD_TENANT_ID, RecordKind
-from neuroharness.evidence.store import AppendResult, EvidenceWriter
+from neuroharness.evidence.chain import FIELD_KIND, FIELD_RECORD_ID, FIELD_TENANT_ID, RecordKind
+from neuroharness.evidence.store import AppendResult, DuplicateRecordError, EvidenceWriter
 from neuroharness.models.common import Digest, Mode, Verdict
 from neuroharness.models.record import DecisionTokenRecord, Evaluation
 from neuroharness.observability.logging import bind_context, get_logger
 from neuroharness.reason import ReasonCode, ReasonName
 from neuroharness.resolve.inputs import Resolution, ResolutionRequest
 from neuroharness.resolve.resolver import resolve as default_resolve
-from neuroharness.tokens.model import SignedToken
+from neuroharness.tokens.model import DecisionToken, SignedToken
+from neuroharness.tokens.nonce import DuplicateIssuanceError, IssuanceEntry
 from neuroharness.tokens.service import TokenService
 
 __all__ = [
     "DecisionContext",
     "EvaluationOutcome",
+    "TokenWithheld",
     "DecisionPipeline",
     "RecordNotConstructibleError",
     "PIPELINE_OWNED_EVALUATION_FIELDS",
+    "issuance_record_id",
 ]
 
 _LOG = get_logger("neuroharness.pipeline")
@@ -93,6 +114,7 @@ _EVENT_EVIDENCE_FAILED = "pipeline.evidence_unavailable"
 _EVENT_TOKEN_WITHHELD = "pipeline.token_withheld"
 _EVENT_RECORD_INVALID = "pipeline.record_not_constructible"
 _EVENT_TOKEN_UNRECORDED = "pipeline.token_record_failed"
+_EVENT_ISSUANCE_UNSTAGED = "pipeline.issuance_record_unstaged"
 
 #: Evaluation fields the pipeline derives, and which a caller may therefore not
 #: supply. Every one of them states *what was decided* rather than what was
@@ -118,6 +140,57 @@ PIPELINE_OWNED_EVALUATION_FIELDS: Final[frozenset[str]] = frozenset(
 _POLICY_BUNDLE_FIELD: Final[str] = "policy_bundle"
 _DIGEST_FIELD: Final[str] = "digest"
 _SESSION_ID_FIELD: Final[str] = "session_id"
+_TOKEN_ISSUED_FIELD: Final[str] = "token_issued"
+_DECISION_ID_FIELD: Final[str] = "decision_id"
+_ACTION_ID_FIELD: Final[str] = "action_id"
+_TRACE_ID_FIELD: Final[str] = "trace_id"
+
+#: Namespace for deriving a ``token_issued`` record's identity from the decision
+#: it authorises. Fixed for the same reason
+#: :data:`~neuroharness.tokens.model.TOKEN_SIGNING_DOMAIN` is fixed: the value
+#: has to mean the same thing in every process and every release, because it is
+#: what makes two attempts to authorise one decision collide instead of
+#: coexisting. Derived once as
+#: ``uuid5(NAMESPACE_DNS, "token-issued.issuance.neuroharness")`` and written
+#: down, so nothing has to recompute it to read this module.
+_ISSUANCE_RECORD_NAMESPACE: Final[UUID] = UUID("8a43e94a-aff7-5b3b-a43f-761a5e9292eb")
+
+
+def _unreadable_issuance(decision_id: str) -> DuplicateIssuanceError:
+    """The refusal for a decision whose issuance record exists but will not read.
+
+    One message and one reason for all three ways that can happen - a payload
+    that is not an object, a payload missing the fields that identify the
+    issuance, and a store that reports the record and then does not return it -
+    because they call for the same operator action and admit the same answer: an
+    unreadable chain is not an empty chain, so nothing is minted.
+    """
+    return DuplicateIssuanceError(
+        "this decision's issuance record is in the chain but cannot be read; "
+        "refusing to mint a second token for it",
+        reason_code=ReasonCode(ReasonName.DUPLICATE_ISSUANCE, decision_id),
+    )
+
+
+def issuance_record_id(*, tenant_id: str, decision_id: str) -> str:
+    """The ``record_id`` of the one ``token_issued`` record a decision may have.
+
+    Derived rather than generated, and that is the whole of ``D-5``'s third
+    option in one function. Because the identity of the issuance record is a
+    function of the decision, appending it *is* the at-most-once claim: the
+    evidence store already refuses a second record with an id its chain holds
+    (:class:`~neuroharness.evidence.store.DuplicateRecordError`), so the claim
+    and the record are one conditional insert rather than two steps with a gap.
+    It also gives an operator and an auditor a lookup instead of a scan: this
+    decision's authorisation is that record or there is none.
+
+    The tenant is length-prefixed so no pair of identifiers can be re-cut into
+    another pair with the same rendering. A collision would fail closed - one
+    decision refused as a duplicate of another - rather than mint twice, but a
+    denial nobody can explain is not much better.
+    """
+    name = f"{len(tenant_id)}:{tenant_id}:{decision_id}"
+    return str(uuid5(_ISSUANCE_RECORD_NAMESPACE, name))
 
 
 class RecordNotConstructibleError(FailClosedError):
@@ -174,6 +247,42 @@ class DecisionContext:
     token_ttl_seconds: int | None = None
 
 
+class TokenWithheld(str, Enum):
+    """Why an outcome carries no token.
+
+    Every absent token has a named reason, and that is the whole point.
+    ``EvaluationOutcome`` used to be constructible as ``verdict=ALLOW,
+    token=None, evidence_failed=False`` - an allow, nothing to execute with, and
+    no signal saying why. The docstring's defence was that every consumer reads
+    ``permits_execution``; the consumer is the gateway, which is written in a
+    later increment, and "the next person will read the docstring" is not an
+    invariant.
+
+    A gateway branching on ``outcome.verdict`` - the obvious thing to do -
+    would have read ``ALLOW`` on a decision whose issuance record never landed.
+    It is fail-closed either way, because nothing can execute without the token,
+    but the *log line* and the *metric* would say the decision was allowed, and
+    an operator reading rollout data would be reading a fiction.
+    """
+
+    #: The verdict itself does not permit execution. ``verdict`` says which.
+    VERDICT = "verdict"
+    #: The class is halted (``FR-49``): nothing is minted whatever the verdict.
+    CLASS_HALTED = "class_halted"
+    #: ``ADR-0016``: an infrastructure reason blocks in every mode, so a shadow
+    #: class is not an unguarded one.
+    INFRASTRUCTURE_FAILURE = "infrastructure_failure"
+    #: The *evaluation* record could not be made durable, so the verdict was
+    #: overridden to ``ABSTAIN`` (``INV-05``, specification 5.3).
+    EVALUATION_UNRECORDED = "evaluation_unrecorded"
+    #: The evaluation was recorded and the ``token_issued`` record was not, so
+    #: the token was minted and withheld and the decision stays retryable.
+    ISSUANCE_UNRECORDED = "issuance_unrecorded"
+    #: The mint refused on its own preconditions - most often that the chain
+    #: already authorises this decision (``DUPLICATE_ISSUANCE``).
+    ISSUANCE_REFUSED = "issuance_refused"
+
+
 @dataclass(frozen=True, slots=True)
 class EvaluationOutcome:
     """What the pipeline decided, recorded, and authorised.
@@ -187,11 +296,50 @@ class EvaluationOutcome:
     resolution: Resolution
     record: AppendResult | None
     token: SignedToken | None
-    evidence_failed: bool = False
+    #: Why no token, or ``None`` when one was issued. Exactly one of these two
+    #: is set - see :meth:`__post_init__`.
+    withheld: TokenWithheld | None = None
+
+    def __post_init__(self) -> None:
+        """A token and a reason for its absence are mutually exclusive and total.
+
+        ``token is None`` if and only if ``withheld`` says why. Stated as a
+        biconditional rather than as two separate checks because the defect this
+        closes was precisely the gap between them: an outcome could carry
+        neither, and read as an allow that authorised nothing.
+
+        Not ``verdict.permits_execution`` on the left: a shadow class holds a
+        token on a ``DENY`` (``INV-11``), so the verdict is the wrong predicate.
+        The token is the only signal that anything may execute, so the token is
+        what the invariant is stated over.
+        """
+        if self.token is not None and self.withheld is not None:
+            raise ValueError(
+                f"outcome carries a token and also says it was withheld "
+                f"({self.withheld.value}); one decision has one answer"
+            )
+        if self.token is None and self.withheld is None:
+            raise ValueError(
+                "outcome carries no token and no reason for its absence; an "
+                "allow that authorises nothing must say why (INV-05)"
+            )
 
     @property
     def permits_execution(self) -> bool:
         return self.token is not None
+
+    @property
+    def evidence_failed(self) -> bool:
+        """The *evaluation* record did not land, so the verdict was overridden.
+
+        A property rather than a field, derived from :attr:`withheld`, so the two
+        cannot disagree. Deliberately narrow, and it means exactly what it meant
+        before: ``ISSUANCE_UNRECORDED`` is also an evidence failure, but it
+        leaves the verdict standing and the decision retryable, which is a
+        different thing for a caller to do something about. Read
+        :attr:`withheld` to tell them apart.
+        """
+        return self.withheld is TokenWithheld.EVALUATION_UNRECORDED
 
     @property
     def shadow(self) -> bool:
@@ -253,10 +401,10 @@ class DecisionPipeline:
                     resolution=resolution,
                     record=None,
                     token=None,
-                    evidence_failed=True,
+                    withheld=TokenWithheld.EVALUATION_UNRECORDED,
                 )
 
-            token = self._maybe_issue(resolution, context, record)
+            token, withheld = self._maybe_issue(resolution, context, record)
 
             _LOG.info(
                 _EVENT_EVALUATED,
@@ -278,6 +426,7 @@ class DecisionPipeline:
                 resolution=resolution,
                 record=record,
                 token=token,
+                withheld=withheld,
             )
 
     # -- internals ---------------------------------------------------------
@@ -404,17 +553,30 @@ class DecisionPipeline:
 
     def _maybe_issue(
         self, resolution: Resolution, context: DecisionContext, record: AppendResult
-    ) -> SignedToken | None:
+    ) -> tuple[SignedToken | None, TokenWithheld | None]:
+        """The token, or ``None`` and the reason there is none.
+
+        Returns the pair rather than a bare ``None`` so the caller cannot build
+        an outcome that withholds a token without saying why - which is the
+        state :class:`EvaluationOutcome` now refuses.
+        """
         withheld = self._withholding_reason(resolution, context.mode)
         if withheld is not None:
             _LOG.debug(
                 _EVENT_TOKEN_WITHHELD,
                 mode=context.mode.value,
                 verdict=resolution.verdict.value,
-                because=withheld,
+                because=withheld.value,
             )
-            return None
+            return None, withheld
 
+        # ``FR-23``: the issuance is itself evidence, and it is handed to the
+        # mint rather than written after it. The token service claims the
+        # decision *by* making this record durable, so a store failure leaves no
+        # claim behind and the decision stays mintable on the next attempt --
+        # while a record that landed, even one whose write reported failure,
+        # refuses the next attempt from the chain rather than from memory.
+        issuance = _IssuanceRecord(self._writer, context)
         try:
             signed = self._tokens.issue(
                 decision_id=context.decision_id,
@@ -426,65 +588,139 @@ class DecisionPipeline:
                 mode=context.mode,
                 verdict=resolution.verdict,
                 ttl_seconds=context.token_ttl_seconds,
+                issuance_evidence=issuance,
             )
         except FailClosedError as exc:
-            # The token service is the second opinion on its own preconditions.
-            # If it refuses, that refusal wins: withholding a token is always
-            # the safe direction.
+            # Two shapes of refusal, kept apart because an operator acts on them
+            # differently. An unrecorded issuance is an evidence outage and the
+            # decision can be retried; anything else is the token service being
+            # the second opinion on its own preconditions, and withholding is
+            # simply the safe direction. Both are caught here rather than
+            # allowed to propagate: letting one out would abandon the evaluation
+            # record that *was* written and surface a store failure from a
+            # method whose contract is to return an outcome.
+            if issuance.unrecorded_token_id is not None:
+                _LOG.error(
+                    _EVENT_TOKEN_UNRECORDED,
+                    mode=context.mode.value,
+                    verdict=resolution.verdict.value,
+                    token_id=issuance.unrecorded_token_id,
+                    because=exc.reason_code.render(),
+                )
+                return None, TokenWithheld.ISSUANCE_UNRECORDED
             _LOG.warning(
                 _EVENT_TOKEN_WITHHELD,
                 mode=context.mode.value,
                 verdict=resolution.verdict.value,
                 because=exc.reason_code.render(),
             )
-            return None
-
-        try:
-            self._write_token_issued(signed, context)
-        except FailClosedError as exc:
-            # ``FR-23``: the issuance is itself evidence. If it cannot be
-            # recorded the token is not returned, so no caller ever holds the
-            # signed bytes and nothing can present them - the nonce stays
-            # unspent and the minting is a local event that had no effect.
-            #
-            # This sits inside ``_maybe_issue`` rather than around the call to
-            # it, because letting it propagate would abandon the evaluation
-            # record that *was* written and surface a raw store failure from a
-            # method whose contract is to return an outcome.
-            _LOG.error(
-                _EVENT_TOKEN_UNRECORDED,
-                mode=context.mode.value,
-                verdict=resolution.verdict.value,
-                token_id=signed.token.token_id,
-                because=exc.reason_code.render(),
-            )
-            return None
-        return signed
+            return None, TokenWithheld.ISSUANCE_REFUSED
+        return signed, None
 
     @staticmethod
-    def _withholding_reason(resolution: Resolution, mode: Mode) -> str | None:
+    def _withholding_reason(resolution: Resolution, mode: Mode) -> TokenWithheld | None:
         """Why no token may be minted, or ``None`` when one may.
 
         Written as a single function so the whole rule is readable at once, and
         so every reason it returns is logged rather than inferred.
         """
         if mode is Mode.HALTED:
-            return "class_halted"
+            return TokenWithheld.CLASS_HALTED
         if any(code.is_infrastructure for code in resolution.reason_codes):
             # ADR-0016: this is what stops a shadow class being an unguarded one.
-            return "infrastructure_failure_blocks_every_mode"
+            return TokenWithheld.INFRASTRUCTURE_FAILURE
         if mode.blocks_on_verdict and not resolution.permits_execution:
-            return f"verdict_{resolution.verdict.value.lower()}"
+            # The verdict, not `verdict_deny`: the outcome already carries the
+            # verdict, and a reason that restated it would be two places for one
+            # fact.
+            return TokenWithheld.VERDICT
         return None
 
-    def _write_token_issued(self, signed: SignedToken, context: DecisionContext) -> None:
-        """Record the issuance as its own linked record (``FR-23``).
 
-        The signature is not recorded and is not reachable from here: the record
-        proves that a token with these bindings existed, and storing the
-        credential would make the audit log worth stealing from.
+class _IssuanceRecord:
+    """One decision's ``token_issued`` record, offered to the mint as its claim.
+
+    Implements :class:`~neuroharness.tokens.nonce.IssuanceEvidence`. Both halves
+    of that protocol read and write exactly one record, the one
+    :func:`issuance_record_id` names, which is what lets absence be *proved*
+    with a single lookup rather than inferred from a scan that might be stale.
+
+    The obligations the protocol states, and how each is met here:
+
+    * *see every durable issuance*. :meth:`recorded_issuance` asks the store,
+      not this process's memory, so an issuance written by another gateway, by a
+      write-ahead replay, or by an attempt whose caller was told the write had
+      failed is found all the same.
+    * *raise unless durable*. The write goes through
+      :class:`~neuroharness.evidence.store.EvidenceWriter`, which re-raises
+      rather than swallowing an outage.
+
+    The signature is never recorded and is not reachable from here: the record
+    proves that a token with these bindings existed, and storing the credential
+    would make the audit log worth stealing from.
+    """
+
+    __slots__ = ("_writer", "_context", "record_id", "unrecorded_token_id")
+
+    def __init__(self, writer: EvidenceWriter, context: DecisionContext) -> None:
+        self._writer = writer
+        self._context = context
+        self.record_id = issuance_record_id(
+            tenant_id=context.tenant_id, decision_id=context.decision_id
+        )
+        #: Set when a write was attempted and could not be made durable, so the
+        #: caller can tell an evidence outage from a refusal to mint.
+        self.unrecorded_token_id: str | None = None
+
+    def recorded_issuance(self) -> IssuanceEntry | None:
+        """The issuance the chain already holds for this decision, if any."""
+        if not self._writer.store.has_record(self._context.tenant_id, self.record_id):
+            return None
+        return self._entry_from_chain()
+
+    def record_issuance(self, token: DecisionToken) -> None:
+        """Append the ``token_issued`` record (``FR-23``).
+
+        Every way this can fail is a way the issuance did not become durable, so
+        every one of them is marked as such: a record the schema rejects is as
+        absent as a record the store refused, and an operator reading the log
+        should see "this issuance was not recorded" in both cases rather than
+        the generic withholding that also covers a refusal to mint at all.
         """
-        token = signed.token
+        try:
+            self._append(token)
+        except DuplicateRecordError as exc:
+            # The store refused the id, which for this record means the chain
+            # already authorises this decision. Reported as what it is -- a
+            # second mint, refused -- rather than as a malformed record, because
+            # the identity is derived and therefore never an accident.
+            raise DuplicateIssuanceError(
+                "the chain already holds the issuance record for this decision",
+                reason_code=ReasonCode(
+                    ReasonName.DUPLICATE_ISSUANCE, self._context.decision_id
+                ),
+            ) from exc
+        except FailClosedError:
+            self.unrecorded_token_id = token.token_id
+            self._drop_staged_issuance()
+            raise
+
+    # -- internals ---------------------------------------------------------
+
+    def _append(self, token: DecisionToken) -> None:
+        self._writer.write(
+            {
+                FIELD_TENANT_ID: self._context.tenant_id,
+                FIELD_KIND: RecordKind.TOKEN_ISSUED.value,
+                FIELD_RECORD_ID: self.record_id,
+                _TRACE_ID_FIELD: self._context.trace_id,
+                _DECISION_ID_FIELD: self._context.decision_id,
+                _ACTION_ID_FIELD: self._context.action_id,
+                _TOKEN_ISSUED_FIELD: self._validated_payload(token),
+            }
+        )
+
+    def _validated_payload(self, token: DecisionToken) -> dict[str, Any]:
         payload = {
             "token_id": token.token_id,
             "decision_id": token.decision_id,
@@ -516,14 +752,61 @@ class DecisionPipeline:
                 f"the token_issued record does not satisfy the decision-record "
                 f"schema: {exc.error_count()} field(s) rejected"
             ) from exc
+        return validated.model_dump(mode="json", exclude_none=True)
 
-        self._writer.write(
-            {
-                FIELD_TENANT_ID: context.tenant_id,
-                FIELD_KIND: RecordKind.TOKEN_ISSUED.value,
-                "trace_id": context.trace_id,
-                "decision_id": context.decision_id,
-                "action_id": context.action_id,
-                "token_issued": validated.model_dump(mode="json", exclude_none=True),
-            }
-        )
+    def _entry_from_chain(self) -> IssuanceEntry:
+        """Rebuild the holding issuance from the record that proves it.
+
+        Only ever reached on the duplicate path, which is why a scan is
+        affordable here and a lookup is used everywhere else. A record that is
+        present but unreadable raises rather than reporting "no issuance": the
+        alternative is to mint a second token because the first one's evidence
+        could not be parsed, and an unreadable chain is not an empty chain.
+        """
+        for record in self._writer.store.read(self._context.tenant_id):
+            if str(record.get(FIELD_RECORD_ID)) != self.record_id:
+                continue
+            payload = record.get(_TOKEN_ISSUED_FIELD)
+            if not isinstance(payload, Mapping):
+                raise _unreadable_issuance(self._context.decision_id)
+            try:
+                return IssuanceEntry(
+                    tenant_id=self._context.tenant_id,
+                    decision_id=self._context.decision_id,
+                    token_id=str(payload["token_id"]),
+                    envelope_digest=Digest(str(payload["envelope_digest"])),
+                    issued_at=datetime.fromisoformat(str(payload["issued_at"])),
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise _unreadable_issuance(self._context.decision_id) from exc
+        raise _unreadable_issuance(self._context.decision_id)
+
+    def _drop_staged_issuance(self) -> None:
+        """Un-stage the record of an issuance that was never handed out.
+
+        The write-ahead log stages whatever the store could not take and replays
+        it on recovery (specification 5.3). For this record that would be wrong
+        twice over: the token was withheld, so the chain would assert an
+        authorisation that never existed, and - because the record's identity is
+        the decision's - the replay would then refuse every retry of a decision
+        that was never authorised at all. The pipeline can drop it precisely
+        because it can prove the token never left this method.
+
+        ``ADR-0026`` records this as the narrowest exception that makes the
+        derived-identity claim correct.
+
+        Narrow on purpose: one record, named by its derived id, only after its
+        own write failed, and logged. It is not a way to make an inconvenient
+        record go away, and it never touches the evaluation record, which stays
+        staged and replays exactly as ``FR-23`` requires.
+        """
+        wal = self._writer.wal
+        if wal is None:
+            return
+        if wal.discard(self.record_id, tenant_id=self._context.tenant_id):
+            _LOG.warning(
+                _EVENT_ISSUANCE_UNSTAGED,
+                record_id=self.record_id,
+                tenant_id=self._context.tenant_id,
+                token_id=self.unrecorded_token_id,
+            )

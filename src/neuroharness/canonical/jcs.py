@@ -41,9 +41,9 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from operator import itemgetter
-from typing import Any, Final, Sequence, TypeAlias
+from typing import Any, Final, TypeAlias, cast
 
 from neuroharness.errors import CanonicalizationError
 
@@ -59,7 +59,7 @@ __all__ = [
 #: What this module accepts. Kept loose on the container types because values
 #: reach it from parsed JSON, from pydantic models and from test fixtures alike;
 #: the runtime check in :func:`_write` is the authority, not this alias.
-JSONScalar: TypeAlias = "None | bool | int | float | str"
+JSONScalar: TypeAlias = "bool | int | float | str | None"
 JSONValue: TypeAlias = "JSONScalar | Mapping[str, Any] | Sequence[Any]"
 
 #: Maximum nesting of objects and arrays. ``{"a": {"b": 1}}`` is depth two.
@@ -314,9 +314,9 @@ def _write(
         for index, (_, key, member) in enumerate(_sorted_members(value, path)):
             if index:
                 out.append(",")
-            out.append(_escape_string(key, path + (key,)))
+            out.append(_escape_string(key, (*path, key)))
             out.append(":")
-            _write(member, path + (key,), depth + 1, max_depth, out)
+            _write(member, (*path, key), depth + 1, max_depth, out)
         out.append("}")
         return
     if isinstance(value, (list, tuple)):
@@ -329,7 +329,7 @@ def _write(
         for index, element in enumerate(value):
             if index:
                 out.append(",")
-            _write(element, path + (str(index),), depth + 1, max_depth, out)
+            _write(element, (*path, str(index)), depth + 1, max_depth, out)
         out.append("]")
         return
     raise CanonicalizationError(
@@ -401,6 +401,11 @@ def parse_json(text: str | bytes) -> JSONValue:
     """
     import json
 
-    return json.loads(
+    # ``json.loads`` is typed ``Any``. The two hooks above are what narrow it to
+    # the declared union: ``parse_constant`` refuses ``NaN``/``Infinity`` and
+    # ``object_pairs_hook`` refuses duplicate keys, so nothing outside the union
+    # survives this call. The cast records that the narrowing is done by the
+    # hooks rather than by the type system.
+    return cast(JSONValue, json.loads(
         text, object_pairs_hook=reject_duplicate_keys, parse_constant=_reject_constant
-    )
+    ))

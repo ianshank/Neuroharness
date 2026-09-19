@@ -1,0 +1,7 @@
+{
+  "id": "A-41",
+  "title": "Approval required on a non-approvable class denies (FR-45, MUT-34)",
+  "state": "not_executable",
+  "owed_by": "P1-10a",
+  "note": "The resolver's refusal is proved by a killing fixture; the scenario adds the approval request that is refused."
+}

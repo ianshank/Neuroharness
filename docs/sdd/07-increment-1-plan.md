@@ -117,9 +117,23 @@ checkable (`tests/fixtures/mutations/`) rather than by re-reading the plan:
   not-yet-built while a test proves otherwise understates coverage in every
   document that quotes it.
 
-Acceptance scenarios `A-19` (unregistered class abstains), `A-20` (hard critic
-error abstains), `A-21` (soft critic failure never changes a verdict) and `A-22`
-(clock unavailable abstains) are also executable here and are claimed.
+Acceptance scenario `A-19` (unregistered class abstains) is executable here and
+is claimed, by `tests/unit/test_registry_loader.py`.
+
+> **Corrected 2026-09-18, during increment 2.** This paragraph originally also
+> claimed `A-20`, `A-21` and `A-22`. Measured against the tree: `A-21` appears in
+> no test and no source file at all; `A-20`'s abstention half is covered by the
+> resolver truth table but its "and alerts" half has no alerting to cover; and no
+> test drives `CLOCK_UNAVAILABLE` through the resolver for `A-22` — what is
+> tested is that `ClockUnavailableError` is raised by the seam. Three scenarios
+> were claimed and one was true.
+>
+> This is the defect the mutation-fixture registry was built to catch, in the
+> half of the evaluation plan that had no registry. Increment 2 built that
+> registry (`tests/fixtures/scenarios/`, `tests/unit/test_scenario_coverage.py`):
+> of 45 acceptance scenarios, **3 are referenced by a test** and 42 carry a
+> declaration naming the task that owes them. A claim of coverage that nothing
+> enforces is the same defect whichever document makes it.
 
 ## 4a. CI stages this increment runs
 

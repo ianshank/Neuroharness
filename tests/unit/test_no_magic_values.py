@@ -21,16 +21,16 @@ outcome the rule wants anyway.
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "neuroharness"
 
 #: Packages whose code participates in producing a verdict, a token, or a record.
-DECISION_PATH_PACKAGES = ("resolve", "tokens", "evidence", "registry", "canonical")
+DECISION_PATH_PACKAGES = ("resolve", "tokens", "evidence", "registry", "canonical", "response")
 
 #: Modules exempt because naming values is precisely their job, or because they
 #: contain no decision logic.

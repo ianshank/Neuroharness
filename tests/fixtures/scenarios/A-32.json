@@ -1,0 +1,6 @@
+{
+  "id": "A-32",
+  "title": "Retry while the prior outcome is unresolved abstains (MUT-27)",
+  "state": "not_executable",
+  "owed_by": "P2-10"
+}

@@ -12,14 +12,14 @@ import pytest
 
 from neuroharness.errors import EvidenceUnavailableError
 from neuroharness.observability.logging import (
+    _MAX_EVENT_LENGTH,
+    _MAX_EXCEPTION_CAUSES,
+    _SAFE_KEYS,
+    _SENSITIVE_KEYS,
     REDACTED,
     REDACTED_EVENT,
     _JsonFormatter,
-    _MAX_EVENT_LENGTH,
-    _MAX_EXCEPTION_CAUSES,
     _scrub_event,
-    _SAFE_KEYS,
-    _SENSITIVE_KEYS,
     bind_context,
     configure_logging,
     current_context,
@@ -195,9 +195,8 @@ def test_bound_context_is_attached_to_every_event(captured: io.StringIO) -> None
 
 def test_context_is_restored_even_when_the_block_raises() -> None:
     before = current_context()
-    with pytest.raises(RuntimeError):
-        with bind_context(action_id="act-9"):
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), bind_context(action_id="act-9"):
+        raise RuntimeError("boom")
     assert current_context() == before
 
 

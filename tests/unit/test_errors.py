@@ -27,7 +27,6 @@ from neuroharness.reason import (
 )
 from neuroharness.version import SchemaKind
 
-
 #: Errors whose constructors ask for more than a message.
 _CONSTRUCTORS = {
     "SchemaVersionError": lambda cls: cls(

@@ -12,7 +12,7 @@ replayed, and a harness that cannot be replayed cannot prove ``INV-09``.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Protocol, runtime_checkable
 
 from neuroharness.errors import ClockUnavailableError
@@ -64,7 +64,7 @@ class SystemClock:
     def now(self) -> datetime:
         if not self._healthy:
             raise ClockUnavailableError("trusted clock source is unhealthy")
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
 
 class FrozenClock:
@@ -75,7 +75,7 @@ class FrozenClock:
     def __init__(self, start: datetime, *, healthy: bool = True) -> None:
         if start.tzinfo is None:
             raise ValueError("FrozenClock requires an aware datetime")
-        self._now = start.astimezone(timezone.utc)
+        self._now = start.astimezone(UTC)
         self._healthy = healthy
 
     def now(self) -> datetime:
