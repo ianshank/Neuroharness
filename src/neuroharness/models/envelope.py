@@ -40,6 +40,7 @@ from typing import Annotated, Any, Final
 from uuid import UUID
 
 from pydantic import (
+    AfterValidator,
     AwareDatetime,
     ConfigDict,
     Field,
@@ -51,6 +52,7 @@ from pydantic import (
 )
 from pydantic_core import to_jsonable_python
 
+from neuroharness import grammar
 from neuroharness.defaults import MAX_REPAIR_BUDGET
 from neuroharness.models.common import (
     Digest,
@@ -182,15 +184,42 @@ ToolName = Annotated[
     str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$", max_length=128)
 ]
 
+def _is_resource_key(value: str) -> str:
+    """Validate against ``grammar.RESOURCE_KEY_PATTERN`` itself (``ADR-0023``).
+
+    A validator rather than ``StringConstraints(pattern=...)`` because pydantic
+    v2 compiles string patterns with the Rust ``regex`` crate, which has no
+    look-around, and the grammar's length guard is a look-ahead. Handing it the
+    source would fail at class construction, and the tempting repair there is to
+    strip the guard - which is how a sixth spelling of the grammar gets written.
+    Running the compiled pattern means the model and the registry share one
+    object and cannot drift by so much as a character.
+    """
+    if grammar.RESOURCE_KEY_PATTERN.fullmatch(value) is None:
+        raise ValueError(
+            f"{value!r} is not a well-formed resource key: expected "
+            "kind:id(/kind:id)* per the resource-key registry (FR-34, ADR-0023)"
+        )
+    return value
+
+
 #: Canonical resource identifier from the resource-key registry (``FR-34``),
 #: e.g. ``service:example-api/target:production``. Leases and mutual-exclusion
 #: properties key on it, so its shape is fixed rather than free-form.
+#:
+#: This alias was the fifth source of the resource-key grammar, and the one the
+#: "four sources become one" repair missed. It admitted ``_`` in a kind segment,
+#: refused ``-`` there, let an identifier begin with ``-`` or ``.``, and bounded
+#: the whole key at 256 rather than 158 - so it disagreed with the signed
+#: registry in both directions. ``models/record.py`` imports it, so that
+#: disagreement reached ``ExecutionLease.resource_key`` (``FR-25``'s lease
+#: identity) and the required ``EffectVerification.resource_key``: a lease on
+#: ``cluster-prod:svc-a`` could be taken and never written down, which
+#: Constitution Art. III says is a decision that was not made.
 ResourceKey = Annotated[
     str,
-    StringConstraints(
-        pattern=r"^[a-z][a-z0-9_]*:[A-Za-z0-9._-]+(/[a-z][a-z0-9_]*:[A-Za-z0-9._-]+)*$",
-        max_length=256,
-    ),
+    StringConstraints(max_length=grammar.MAX_RESOURCE_KEY_LENGTH),
+    AfterValidator(_is_resource_key),
 ]
 
 #: Fact key components: bounded scalars only. A nested object here would be an

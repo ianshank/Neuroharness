@@ -12,7 +12,7 @@ Neuroharness sits between an agent and the tools it wants to call. The agent pro
 
 **Not built yet:** every component that talks to something outside the process. The MCP gateway, the policy decision point client, the critic bank and the broker are absent, and with them the `policy/` bundles and the `critics/` packs; they attach to the core through the protocol seams it already defines. `docs/sdd/07-increment-1-plan.md` scopes the increment, and its section 4a lists which of the twelve specified CI stages run today and which do not.
 
-This repository also holds the research input and three rounds of peer review. Round two put the specification through four adversarial reviews; the resulting v0.2 changed how approvals bind, how rollout modes interact with failure, how mutual exclusion is enforced, and what the project claims to verify. Round three is the first to check a research synthesis against running code rather than against the specification alone.
+This repository also holds the research input and four rounds of peer review. Round two put the specification through four adversarial reviews; the resulting v0.2 changed how approvals bind, how rollout modes interact with failure, how mutual exclusion is enforced, and what the project claims to verify. Round three is the first to check a research synthesis against running code rather than against the specification alone; round four attacks the implementation itself, and found a resource-key grammar the increment-2 repair had left running in three record fields.
 
 ## Document map
 
@@ -22,6 +22,7 @@ This repository also holds the research input and three rounds of peer review. R
 | `docs/review/2026-09-18-peer-review-research-synthesis.md` | Round-one peer review of the synthesis: verdict, major/minor issues, citation audit. | You want to know what the research got right and what it left out. |
 | `docs/review/2026-09-18-round-2-deep-dive-review.md` | Round-two review of the specification itself: 71 findings from four adversarial lenses, plus an audit that corrects round one. | You want to know how the design was attacked and what broke. |
 | `docs/review/2026-09-19-round-3-synthesis-vs-code-review.md` | Round-three review: a second, multi-model research synthesis checked claim by claim against the tree at `944e077`. | You want to know which outside recommendations this repository does not already hold, and which of those are right. |
+| `docs/review/2026-09-19-round-4-code-adversarial-review.md` | Round-four review: the implementation attacked and executed — a live grammar defect, three specification defects, and the security properties that held under test. | You want to know what the deterministic core actually does under attack, not what it claims. |
 | `docs/sdd/README.md` | How Spec-Driven Development works in this repo and the status of each SDD document. | You are about to change anything under `docs/sdd/`. |
 | `docs/sdd/00-constitution.md` | Non-negotiable principles every design and code change must satisfy. | Always. Start here. |
 | `docs/sdd/01-specification.md` | Functional/non-functional requirements, invariant registry, verdict semantics, acceptance scenarios. | You are implementing or testing a requirement. |

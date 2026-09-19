@@ -1,24 +1,34 @@
-"""The four resource-key grammars agree, on every string, in both directions.
+"""Every resource-key grammar agrees, on every string, in both directions.
 
-Four modules used to spell this grammar independently and two of them
-disagreed. The consequence was not cosmetic: ``cluster-prod:svc-a`` was accepted
-by the signed registry, became the broker's lease identity under ``FR-25``, and
-then could not be recorded, so a lease contention reached an operator as
-``SCHEMA_INVALID`` - a harness fault - rather than as contention, and the action
-class abstained until somebody renamed the resource.
+Modules used to spell this grammar independently and they disagreed. The
+consequence was not cosmetic: ``cluster-prod:svc-a`` was accepted by the signed
+registry, became the broker's lease identity under ``FR-25``, and then could not
+be recorded, so a lease contention reached an operator as ``SCHEMA_INVALID`` - a
+harness fault - rather than as contention, and the action class abstained until
+somebody renamed the resource.
 
-Nothing sat between the four. ``tests/unit/test_anchored_patterns.py`` checks
-that each pattern is anchored; no test checked that they were the *same*
-pattern. This module is that check, and it is a property test rather than a
-table because the disagreement was in a corner of the charset - one character,
-in one position, in one of two segments - which is exactly what a table of
-hand-chosen examples misses and what generation finds.
+Nothing sat between them. ``tests/unit/test_anchored_patterns.py`` checks that
+each pattern is anchored; no test checked that they were the *same* pattern.
+This module is that check, and it is a property test rather than a table because
+the disagreement was in a corner of the charset - one character, in one position,
+in one of two segments - which is exactly what a table of hand-chosen examples
+misses and what generation finds.
+
+**It is written over consumers, not over a fixed count of them, because the
+first version of it was not.** It covered four and the repair unified four,
+while a fifth - ``models/envelope.py``'s ``ResourceKey`` alias, which
+``models/record.py`` imports for ``ExecutionLease`` and ``EffectVerification`` -
+went on spelling the grammar by hand and went on disagreeing, in both
+directions, for exactly the reasons above. A module that enumerates the
+consumers it knows about proves nothing about the one nobody added to it, so any
+new place that constrains a resource key belongs in :func:`_recordable`,
+:func:`_carryable` or :func:`_annotated` here, in the same change.
 
 Two directions, because the drift had two:
 
 * every string the registry accepts must be recordable (``cluster-prod:svc-a``
   was not);
-* every string the record model accepts must resolve in the registry
+* every string a record or wire model accepts must resolve in the registry
   (``s3:bucket_name`` did not, so a record could assert a lease on a key no
   lookup will ever match - the ``C-02`` shape reached through a grammar
   mismatch instead of a trailing newline).
@@ -37,11 +47,24 @@ from typing import Final
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from pydantic import TypeAdapter, ValidationError
 
 from neuroharness import grammar
+from neuroharness.models.envelope import ResourceKey
 from neuroharness.models.record import _REASON_CODE_RE
 from neuroharness.reason import ReasonCode, ReasonName
 from neuroharness.registry.resource_keys import is_resource_key
+
+#: The typed alias every wire model reaches the grammar through. ``ResourceKey``
+#: annotates ``ActionClassRef.resource_key`` on the envelope and, imported by
+#: ``models/record.py``, ``RecordActionClassRef``, ``ExecutionLease`` (``FR-25``'s
+#: lease identity) and ``EffectVerification`` (required, and the field that
+#: carries ``EFFECT_MISMATCH:<resource_key>``). It is a consumer of the grammar
+#: exactly as the registry and the reason-code regex are, so it belongs in the
+#: same property; it was left out of the first version of this module, which is
+#: how it went on spelling the grammar independently after the other four were
+#: unified.
+_RESOURCE_KEY_ALIAS: Final[TypeAdapter[str]] = TypeAdapter(ResourceKey)
 
 #: Deterministic, like every other property module here: `.hypothesis/` is not
 #: checked in, and a replay-determinism project with a randomised suite is a
@@ -86,10 +109,28 @@ def _carryable(key: str) -> bool:
     return True
 
 
+def _annotated(key: str) -> bool:
+    """Can the wire models hold it -- a lease, an effect verification, an envelope?
+
+    Separate from :func:`_recordable` because the two reach the grammar by
+    different routes: ``_REASON_CODE_RE`` is built from ``grammar`` at import,
+    while this is the ``Annotated`` alias the model fields are declared with. A
+    record whose ``reason_code`` may say ``RESOURCE_BUSY:cluster-prod:svc-a``
+    while its ``ExecutionLease.resource_key`` may not hold the same key is
+    internally inconsistent in the one place the inconsistency is invisible:
+    the reason code renders, and the record that should carry it will not build.
+    """
+    try:
+        _RESOURCE_KEY_ALIAS.validate_python(key)
+    except ValidationError:
+        return False
+    return True
+
+
 @_SETTINGS
 @given(candidate_keys)
 def test_the_registry_and_the_record_model_agree(key: str) -> None:
-    """The headline property: one grammar, four consumers, no disagreement.
+    """The headline property: one grammar, every consumer, no disagreement.
 
     Generated over an alphabet wider than any of them, so a character exactly
     one side admits is reachable. Before the fix this failed on the first
@@ -97,6 +138,10 @@ def test_the_registry_and_the_record_model_agree(key: str) -> None:
     """
     assert is_resource_key(key) == _recordable(key), (
         f"{key!r}: registry says {is_resource_key(key)}, record model says {_recordable(key)}"
+    )
+    assert is_resource_key(key) == _annotated(key), (
+        f"{key!r}: registry says {is_resource_key(key)}, "
+        f"the wire-model alias says {_annotated(key)}"
     )
 
 
@@ -113,6 +158,10 @@ def test_every_key_the_registry_accepts_can_be_recorded(key: str) -> None:
         pytest.skip("longer than MAX_RESOURCE_KEY_LENGTH")
     assert _carryable(key), f"{key!r} cannot be carried as a reason-code subject"
     assert _recordable(key), f"{key!r} is registry-valid and unrecordable"
+    assert _annotated(key), (
+        f"{key!r} is registry-valid and no ExecutionLease or EffectVerification "
+        "can hold it"
+    )
 
 
 @_SETTINGS
@@ -126,7 +175,7 @@ def test_every_key_the_record_model_accepts_resolves_in_the_registry(key: str) -
     (``FR-34``) exists to prevent: two spellings of one resource are two
     policies, and only one of them was reviewed.
     """
-    if not _recordable(key):
+    if not _recordable(key) and not _annotated(key):
         return
     assert is_resource_key(key), f"{key!r} is recordable and resolves to nothing"
 
@@ -143,6 +192,7 @@ def test_a_maximum_length_key_is_accepted_by_every_consumer() -> None:
     assert is_resource_key(longest)
     assert _carryable(longest)
     assert _recordable(longest)
+    assert _annotated(longest)
 
 
 def test_one_character_past_the_bound_is_refused_everywhere() -> None:
@@ -151,6 +201,7 @@ def test_one_character_past_the_bound_is_refused_everywhere() -> None:
     assert len(too_long) == grammar.MAX_RESOURCE_KEY_LENGTH + 1
     assert not is_resource_key(too_long)
     assert not _recordable(too_long)
+    assert not _annotated(too_long)
 
 
 # --- The regression, so the property cannot pass vacuously -------------------
@@ -188,3 +239,7 @@ def test_the_property_catches_the_drift_it_was_written_for(key: str, why: str) -
         "the historical pattern above has been altered"
     )
     assert is_resource_key(key) == _recordable(key), f"{key!r} still disagrees after the fix"
+    assert is_resource_key(key) == _annotated(key), (
+        f"{key!r} still disagrees after the fix: the wire-model alias in "
+        "models/envelope.py is spelling the grammar independently"
+    )
