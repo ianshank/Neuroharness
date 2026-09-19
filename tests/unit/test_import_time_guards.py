@@ -118,19 +118,22 @@ def test_an_unranked_verdict_refuses_at_import(monkeypatch: pytest.MonkeyPatch) 
 
     from neuroharness.resolve import safety as safety_module
 
-    with pytest.raises(ConfigurationError) as refusal:
+    # `finally`, not a trailing pair of statements: if the refusal does not
+    # arrive, or a message assertion fails, execution never reaches the restore
+    # and the module is left holding whatever the failed reload wrote. A
+    # half-initialised safety order is the one piece of state the rest of this
+    # suite cannot tolerate, so a failure here must not become a failure
+    # everywhere else as well -- the second symptom would bury the first.
+    try:
+        with pytest.raises(ConfigurationError) as refusal:
+            importlib.reload(safety_module)
+
+        message = str(refusal.value)
+        assert "rank every Verdict member exactly once" in message
+        assert "ESCALATE" in message, "the refusal does not name the member that is unranked"
+    finally:
+        monkeypatch.undo()
         importlib.reload(safety_module)
-
-    message = str(refusal.value)
-    assert "rank every Verdict member exactly once" in message
-    assert "ESCALATE" in message, "the refusal does not name the member that is unranked"
-
-    # Restore the module for every test that runs after this one. `monkeypatch`
-    # undoes the enum, but the reloaded module object keeps whatever the failed
-    # reload left behind, and a half-initialised safety order is the one thing
-    # the rest of this suite cannot tolerate.
-    monkeypatch.undo()
-    importlib.reload(safety_module)
 
 
 def test_the_order_ranks_every_verdict_on_the_tree_as_merged() -> None:

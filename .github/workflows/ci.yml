@@ -347,11 +347,22 @@ jobs:
         # without a secret is a scan that will eventually be quietly disabled.
         env:
           GITLEAKS_VERSION: "8.18.4"
+          # SHA-256 of the pinned release asset, verified against the published
+          # artifact rather than copied from a report. Streaming a remote
+          # tarball straight into `tar` and then executing what it wrote is
+          # download-of-code-without-integrity-check (CWE-494): the version pin
+          # names *which* release, and nothing checked the bytes actually were
+          # that release. In the one job whose subject is supply-chain hygiene,
+          # and in a repository that refuses an unsigned policy bundle
+          # (`SEC-05`), that asymmetry is not defensible.
+          GITLEAKS_SHA256: "ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d"
         run: |
           set -euo pipefail
           curl --fail --silent --show-error --location \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin gitleaks
+            -o /tmp/gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum --check --strict -
+          tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
           gitleaks version
 
       - name: No secrets in the tree or its history

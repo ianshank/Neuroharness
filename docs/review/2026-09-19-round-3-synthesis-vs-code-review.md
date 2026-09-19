@@ -6,7 +6,7 @@
 | **Reviewed against** | The repository at `944e077`: the SDD package (constitution v0.2, specification v0.2, technical plan, WBS, threat model, evaluation plan, governance, increment plans 1 and 2, the fact-provider specification, ADR-0001..0026, both JSON Schemas) and `src/neuroharness/` as built. |
 | **Method** | Every claim the synthesis makes *about this repository* was checked against the file it concerns. Measurements were taken, not recalled; §8 lists the commands. |
 | **Review date** | 2026-09-19 |
-| **Findings** | 15 against the synthesis (2 false, 4 already-decided-differently, 3 substantive and surviving, 6 confirmed-and-sharpened), plus 4 incidental findings against the tree (§6a) |
+| **Findings** | 18 against the synthesis — 4 false against the tree (`R3-F1`–`R3-F3`, including `R3-F2b`), 4 already-decided-differently (`R3-D1`–`R3-D4`), 3 substantive and surviving (`R3-S1`–`R3-S3`), 7 confirmed-and-sharpened (`R3-C1`–`R3-C7`) — plus 4 incidental findings against the tree (§6a) |
 | **Verdict** | **Accept the sequencing; reject the currency.** The synthesis's central conclusion — finish the symbolic enforcement plane before adding anything neural — is right, is independently reached three times, and matches the dependency graph in `03-work-breakdown.md`. But the artifact was written against a v0.1-era snapshot. It re-derives five decisions already recorded as ADRs, cites one invariant ID this project does not have, and its single highest-priority recommendation is correct in its diagnosis and unimplementable in its proposed form. Three findings survive contact with the tree and are worth work; two of the three are narrower and more actionable than the synthesis states. |
 
 Finding IDs are namespaced by lens, continuing the round-2 convention: `R3-F` false against the tree, `R3-D` already decided, `R3-S` substantive and surviving, `R3-C` confirmed.
@@ -29,11 +29,13 @@ The answer is: three.
 
 The synthesis adjudicates its sharpest three-way disagreement — whether confidence scores may appear in a control path — by ruling that *"Your own `INV-16` (no `CognitiveSignal` field, including confidence, reaches a control path) already decides this."*
 
-It does not, because there is no `INV-16` here. The identifier appears in this repository exactly three times, always as an **unresolved upstream reference**:
+It does not, because there is no `INV-16` here. The identifier appears in this repository five times, in three documents, always as an **unresolved upstream reference** — never as a requirement with a definition. The three that carry the project's own position on it:
 
 - `01-specification.md:121` adopts its evident content as `INV-01` and marks the adoption provisional: *"(Adopted from upstream `INV-16`; `OQ-01`.)"*
 - `01-specification.md:662` carries `OQ-01` as open: *"Confirm mapping of upstream `INV-16`/`DEC-008` to `INV-01`/`INV-02`, or link the upstream registry"* — owner: product owner, needed by `P0-01`.
 - `2026-09-18-peer-review-research-synthesis.md:109` is where round 1 first raised it: *"`INV-16` and `DEC-008` are referenced but never defined; they appear to belong to an upstream registry."*
+
+The remaining two are the citations those three respond to: the research synthesis that introduced the identifier, and round one's own note that the upstream registry was unavailable. An earlier draft of this section said "exactly three times" while §8's command reported five hits on the same snapshot — the count of *bulleted* sites, published as the count of occurrences. It is corrected here rather than quietly, because a review whose first finding is a miscitation has no standing to leave one of its own.
 
 `CognitiveSignal` appears nowhere in `docs/` or `src/`. So the synthesis resolves a disagreement by citing a registry entry this project flagged as missing a year of review ago and still lists as an open question.
 

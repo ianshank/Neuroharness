@@ -264,9 +264,20 @@ def test_every_job_that_runs_python_tooling_installs_it_first() -> None:
         used = [tool for tool in _NEEDS_INSTALL if tool in body]
         if not used:
             continue
-        assert 'pip install -e ".[dev]"' in body, (
+        install_at = body.find('pip install -e ".[dev]"')
+        assert install_at >= 0, (
             f"the {name!r} job runs {used} and never installs the dev extra, so the step "
             "fails with a missing module rather than with the finding it exists to report"
+        )
+        # Presence is not enough: an install *after* the first tooling command
+        # leaves the job failing in exactly the same way, and a membership check
+        # would call that fixed. Same mistake as the closure finding one file
+        # over -- asserting that a thing is written somewhere rather than that
+        # it is written where it has to be.
+        first_tool_at = min(body.find(tool) for tool in used)
+        assert install_at < first_tool_at, (
+            f"the {name!r} job installs the dev extra at offset {install_at}, after it first "
+            f"runs {used} at {first_tool_at}; the tooling step still fails with a missing module"
         )
 
 
@@ -290,12 +301,18 @@ def test_the_resolver_gate_is_declared_where_the_specification_asks_for_it() -> 
     number is ever lowered to make a red build green, this fails and names it.
     """
     makefile = _read(_MAKEFILE)
-    resolver_floors = [
-        match.group(1)
-        for match in _FAIL_UNDER_RE.finditer(makefile)
-        if "neuroharness.resolve" in makefile[max(0, match.start() - 200) : match.start()]
-    ]
-    assert resolver_floors == ["100"], (
-        f"the resolver branch gate is declared at {resolver_floors or 'nothing'}; the "
-        "specification asks for 100"
+    # Read the `resolver-coverage` recipe itself rather than a character window
+    # around the flag. A 200-character look-behind could bind `neuroharness.resolve`
+    # to a *neighbouring* command's floor, so the resolver recipe could lose its
+    # own `--cov-fail-under=100` and this would stay green -- a gate check that
+    # asserts the right value in the wrong place.
+    recipe = "\n".join(_recipe_lines(makefile, "resolver-coverage"))
+    assert recipe, "the Makefile declares no `resolver-coverage` recipe"
+    assert "neuroharness.resolve" in recipe, (
+        f"`resolver-coverage` no longer measures the resolver package: {recipe!r}"
+    )
+    floors = _FAIL_UNDER_RE.findall(recipe)
+    assert floors == ["100"], (
+        f"the resolver branch gate is declared at {floors or 'nothing'} in its own recipe; "
+        "the specification (governance section 3, stage 2) asks for 100"
     )
