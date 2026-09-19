@@ -114,6 +114,51 @@ def test_the_coverage_floor_is_one_number() -> None:
     assert len(set(floors.values())) == 1, f"the coverage floor disagrees with itself: {floors}"
 
 
+#: A workflow job, split on the two-space-indented key that names it.
+_JOB_SPLIT_RE: Final[re.Pattern[str]] = re.compile(r"\n  (?=[a-z][\w-]*:\n)")
+
+#: The tooling that only exists after `pip install -e ".[dev]"`.
+_NEEDS_INSTALL: Final[tuple[str, ...]] = (
+    "python -m pytest",
+    "python -m ruff",
+    "python -m mypy",
+)
+
+
+def _jobs(workflow: str) -> dict[str, str]:
+    return {
+        chunk.strip().split(":", 1)[0]: chunk
+        for chunk in _JOB_SPLIT_RE.split(workflow)
+        if chunk.strip() and ":" in chunk
+    }
+
+
+def test_every_job_that_runs_python_tooling_installs_it_first() -> None:
+    """A job cannot run ``python -m pytest`` without the dev extra.
+
+    This is a regression test for a defect this file's own change introduced.
+    The ``security`` job needed no Python packages -- gitleaks is a downloaded
+    binary and pip-audit installs itself -- so it had no install step. Adding a
+    pytest step to it produced ``No module named pytest`` on the first CI run,
+    which is the cheapest possible failure and also the most avoidable: seven
+    other jobs carry the line, and the eighth did not.
+
+    Asserted over every job rather than over the one that broke, because the
+    next job added will be the next one to forget.
+    """
+    jobs = _jobs(_read(_WORKFLOW))
+    assert len(jobs) >= 8, f"found {len(jobs)} jobs; the split has broken: {sorted(jobs)}"
+
+    for name, body in sorted(jobs.items()):
+        used = [tool for tool in _NEEDS_INSTALL if tool in body]
+        if not used:
+            continue
+        assert 'pip install -e ".[dev]"' in body, (
+            f"the {name!r} job runs {used} and never installs the dev extra, so the step "
+            "fails with a missing module rather than with the finding it exists to report"
+        )
+
+
 def test_the_marker_selections_match() -> None:
     """``-m mutation`` is a CI job; the Makefile must run the same selection."""
     workflow = _read(_WORKFLOW)

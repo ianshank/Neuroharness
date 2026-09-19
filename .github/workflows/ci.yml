@@ -359,6 +359,13 @@ jobs:
         # which is the classic way a leak detector becomes a leak.
         run: gitleaks detect --source . --redact --no-banner --verbose
 
+      # This job needs the package installed only from here on. The gitleaks
+      # step above is a downloaded binary and deliberately runs first: a real
+      # secret in the tree should be reported before the runner spends a minute
+      # on a dependency install, and the install is what this step added.
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
       # The allowlist is the cheap way to make this stage quiet, so it is held
       # to a shape by a test: default rules extended and never replaced, every
       # entry an anchored literal, and every entry still matching something real.
