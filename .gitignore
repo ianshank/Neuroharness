@@ -23,3 +23,8 @@ coverage.xml
 .idea/
 .vscode/
 .DS_Store
+
+# Claude Code. `.claude/skills/` is committed on purpose -- the skills are part
+# of the repository's procedural knowledge and are gated by
+# `tests/unit/test_skills_are_current.py`. Only per-developer state is ignored.
+.claude/settings.local.json

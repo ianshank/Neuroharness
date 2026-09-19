@@ -39,6 +39,27 @@ This is a fail-closed policy-and-verification harness for LLM agent tool calls. 
 
 ## Running the checks
 
+Eight jobs block a pull request, and two targets cover them between them:
+
+```sh
+make install   # the package and its dev extra, as every CI job does
+make gate      # every gate that needs no external binary
+make gate-all  # the above plus gitleaks and pip-audit -- all eight jobs
+make help      # one target per job: lint, coverage, mutation, schema, docs, ...
+```
+
+`gate` is the fast loop and `gate-all` is the complete one. The split is on
+whether an external binary is needed, not on how important the check is: once
+`security` propagates its failures, a `gate` that depended on it would be red on
+every checkout without gitleaks installed, and this file's own argument about
+always-red hooks applies to always-red targets too.
+
+`tests/unit/test_gate_parity.py` fails if the Makefile and the workflow ever stop
+agreeing. A local gate that runs less than the pipeline is worse than none,
+because it is trusted.
+
+The underlying commands, if you would rather run them directly:
+
 ```sh
 python -m pip install -e ".[dev]"
 
@@ -58,6 +79,26 @@ python tools/render_schema_patterns.py
 ```
 
 Hand-editing what that tool writes is a test failure, deliberately.
+
+## Skills
+
+`.claude/skills/` holds the procedures that touch several files at once, where
+missing one site is easy and the symptom is remote from the cause:
+
+| Skill | When |
+|---|---|
+| `add-reason-code` | A new refusal, abstention or verdict reason needs a code |
+| `add-record-kind` | Something new must be recorded and needs its own payload |
+| `add-mutation-fixture` | You added or changed a hard gate, or are promoting a fixture |
+| `run-gates` | Before pushing, or when a check is red |
+
+Each one carries a machine-readable block naming the sites it tells you to
+change, and `tests/unit/test_skills_are_current.py` holds those names to the
+tree. A skill that goes stale fails CI rather than sending the next contributor
+confidently into the wrong edit — instructions rot exactly the way the documents
+in `docs/sdd/` rot, and the answer is the same: make the claim executable.
+
+If you change a coupling a skill describes, update the skill in the same change.
 
 ## Writing tests
 

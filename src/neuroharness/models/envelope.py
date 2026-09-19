@@ -40,17 +40,20 @@ from typing import Annotated, Any, Final
 from uuid import UUID
 
 from pydantic import (
+    AfterValidator,
     AwareDatetime,
     ConfigDict,
     Field,
     SerializerFunctionWrapHandler,
     StringConstraints,
+    WithJsonSchema,
     field_validator,
     model_serializer,
     model_validator,
 )
 from pydantic_core import to_jsonable_python
 
+from neuroharness import grammar
 from neuroharness.defaults import MAX_REPAIR_BUDGET
 from neuroharness.models.common import (
     Digest,
@@ -182,14 +185,56 @@ ToolName = Annotated[
     str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$", max_length=128)
 ]
 
+def _is_resource_key(value: str) -> str:
+    """Validate against ``grammar.RESOURCE_KEY_PATTERN`` itself (``ADR-0023``).
+
+    A validator rather than ``StringConstraints(pattern=...)`` because pydantic
+    v2 compiles string patterns with the Rust ``regex`` crate, which has no
+    look-around, and the grammar's length guard is a look-ahead. Handing it the
+    source would fail at class construction, and the tempting repair there is to
+    strip the guard - which is how a sixth spelling of the grammar gets written.
+    Running the compiled pattern means the model and the registry share one
+    object and cannot drift by so much as a character.
+    """
+    if grammar.RESOURCE_KEY_PATTERN.fullmatch(value) is None:
+        raise ValueError(
+            f"{value!r} is not a well-formed resource key: expected "
+            "kind:id(/kind:id)* per the resource-key registry (FR-34, ADR-0023)"
+        )
+    return value
+
+
 #: Canonical resource identifier from the resource-key registry (``FR-34``),
 #: e.g. ``service:example-api/target:production``. Leases and mutual-exclusion
 #: properties key on it, so its shape is fixed rather than free-form.
+#:
+#: This alias was the fifth source of the resource-key grammar, and the one the
+#: "four sources become one" repair missed. It admitted ``_`` in a kind segment,
+#: refused ``-`` there, let an identifier begin with ``-`` or ``.``, and bounded
+#: the whole key at 256 rather than 158 - so it disagreed with the signed
+#: registry in both directions. ``models/record.py`` imports it, so that
+#: disagreement reached ``ExecutionLease.resource_key`` (``FR-25``'s lease
+#: identity) and the required ``EffectVerification.resource_key``: a lease on
+#: ``cluster-prod:svc-a`` could be taken and never written down, which
+#: Constitution Art. III says is a decision that was not made.
 ResourceKey = Annotated[
     str,
-    StringConstraints(
-        pattern=r"^[a-z][a-z0-9_]*:[A-Za-z0-9._-]+(/[a-z][a-z0-9_]*:[A-Za-z0-9._-]+)*$",
-        max_length=256,
+    StringConstraints(max_length=grammar.MAX_RESOURCE_KEY_LENGTH),
+    AfterValidator(_is_resource_key),
+    # `AfterValidator` has no JSON Schema representation, so without this the
+    # generated schema for this alias is `{"type": "string", "maxLength": 158}`
+    # -- it would accept `s3:bucket_name` while the model refuses it. Nothing in
+    # the tree calls `model_json_schema()` today, so the regression is latent
+    # rather than live; it is restored anyway, because a model whose
+    # self-description is wider than its behaviour is the same defect this alias
+    # was just repaired for, one layer out. The pattern is ECMA-262 (the
+    # look-ahead included, per `grammar.py`), which is what JSON Schema reads.
+    WithJsonSchema(
+        {
+            "type": "string",
+            "pattern": grammar.RESOURCE_KEY_PATTERN.pattern,
+            "maxLength": grammar.MAX_RESOURCE_KEY_LENGTH,
+        }
     ),
 ]
 

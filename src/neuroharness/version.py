@@ -46,12 +46,55 @@ _READABLE: Final[dict[str, frozenset[str]]] = {
     SchemaKind.REGISTRY: frozenset({"1.0"}),
 }
 
-# The single version this build *writes*. Always a member of the readable set.
+# The single version this build *writes*. Always a member of the readable set,
+# and `_assert_written_versions_are_readable` below is what makes that sentence
+# true rather than merely written down.
 _WRITTEN: Final[dict[str, str]] = {
     SchemaKind.ENVELOPE: "1.1",
     SchemaKind.RECORD: "1.1",
     SchemaKind.REGISTRY: "1.0",
 }
+
+
+def _assert_written_versions_are_readable() -> None:
+    """Every kind writes a version it can read back, and covers every kind.
+
+    Import-time, like the totality guards in ``grammar``, ``reason``,
+    ``resolve.inputs``, ``resolve.safety`` and ``envelope.arguments``. This
+    invariant was stated in a comment for two increments while five of its
+    siblings were executable, and a comment is exactly as strong as the next
+    person's attention.
+
+    What it prevents is narrow and bad. A build whose written version is outside
+    its own readable set produces records, envelopes or registries that the same
+    build refuses on the way back in -- so evidence is written and then found
+    unreadable at replay, which ``FR-71`` and Constitution Art. III make the one
+    failure the evidence layer may not have. The two tables are also required to
+    describe the same set of kinds: a kind that is written and not readable is
+    the same defect, and a kind that is readable and never written is a claim
+    with nothing behind it.
+    """
+    written_kinds = set(_WRITTEN)
+    readable_kinds = set(_READABLE)
+    if written_kinds != readable_kinds:
+        raise ValueError(
+            "the schema-version tables describe different kinds: "
+            f"written-only={sorted(written_kinds - readable_kinds)} "
+            f"readable-only={sorted(readable_kinds - written_kinds)}"
+        )
+    unreadable = sorted(
+        f"{kind}={version!r} not in {sorted(_READABLE[kind])}"
+        for kind, version in _WRITTEN.items()
+        if version not in _READABLE[kind]
+    )
+    if unreadable:
+        raise ValueError(
+            "this build writes schema versions it cannot read back, so its own "
+            f"evidence would fail replay (FR-71): {unreadable}"
+        )
+
+
+_assert_written_versions_are_readable()
 
 
 class SchemaCompatibility:

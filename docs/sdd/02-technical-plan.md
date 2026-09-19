@@ -53,6 +53,88 @@ flowchart LR
 
 The governed runtime is outside every trust zone. It can reach only the gateway (for proposals) and receives only typed responses.
 
+### 2.2a Components of the deterministic core (C4 level 3) — **built**
+
+Levels 1 and 2 above describe the system as designed, most of which does not
+exist yet. This level describes only what is in `src/neuroharness/` today, so a
+reader can tell the two apart without cross-referencing the increment plans. The
+boundary is the point: everything below is merged, tested and importable; the
+gateway, PDP client, critic bank and broker are not, and no diagram in this
+document should be read as evidence that they are.
+
+```mermaid
+flowchart TB
+  subgraph core["Deterministic core (one process, no network, no clock of its own)"]
+    direction TB
+    subgraph identity["Identity and canonical form"]
+      GR["grammar<br/><i>one lexical grammar for every recorded identifier</i>"]
+      JCS["canonical.jcs<br/><i>RFC 8785 canonical JSON</i>"]
+      DIG["canonical.digest<br/><i>proposal and envelope digests</i>"]
+    end
+    subgraph vocabulary["Closed vocabularies"]
+      RSN["reason<br/><i>the closed reason-code catalogue</i>"]
+      ERR["errors<br/><i>typed fail-closed hierarchy</i>"]
+      DEF["defaults + config<br/><i>every governing value, named</i>"]
+    end
+    subgraph contracts["Wire contracts"]
+      ENV["models.envelope<br/><i>proposal / context split</i>"]
+      REC["models.record<br/><i>the decision record</i>"]
+      VER["version<br/><i>schema compatibility</i>"]
+    end
+    subgraph decision["Decision"]
+      REG["registry<br/><i>action classes, resource keys</i>"]
+      RES["resolve<br/><i>safety order, monotone resolver</i>"]
+      PIPE["pipeline<br/><i>resolve, record, then mint</i>"]
+    end
+    subgraph attestation["Attestation"]
+      EVD["evidence<br/><i>hash chain, WAL, checkpoints</i>"]
+      TOK["tokens<br/><i>single-use, digest-bound</i>"]
+    end
+    RESP["response<br/><i>the only route to the agent</i>"]
+    SEAM["seams<br/><i>Clock, IdGenerator</i>"]
+    OBS["observability<br/><i>structured, redacting logger</i>"]
+  end
+
+  GR --> RSN
+  GR --> REC
+  JCS --> DIG
+  DIG --> ENV
+  RSN --> RES
+  RSN --> REC
+  ENV --> REG
+  REG --> RES
+  RES --> PIPE
+  PIPE --> EVD
+  PIPE --> TOK
+  PIPE --> RESP
+  EVD --> TOK
+  SEAM -.-> EVD
+  SEAM -.-> TOK
+  VER -.-> ENV
+  VER -.-> REC
+  VER -.-> REG
+
+  style core fill:#fbfbfd,stroke:#8a8aa0
+```
+
+Three properties of this level are enforced rather than described:
+
+- **The arrows do not run backwards.** No lower layer imports a higher one;
+  `resolve` reaches nothing but its own inputs, and `pipeline` is the only
+  module that sequences record-then-token (`INV-05`).
+- **`seams` is dashed** because it is injected, never imported for effect.
+  Nothing in `resolve`, `tokens`, `evidence` or `registry` calls `datetime.now`
+  or `uuid4` directly, which is what makes replay (`FR-71`) possible.
+- **`response` is the only edge that reaches the governed model.** The token and
+  the chain position have no field to occupy in `AgentResponse`, so the leak is
+  prevented by construction rather than by remembering to omit them.
+
+**Not at this level, because they do not exist:** `gateway/`, the PDP client,
+`critics/`, the broker, `policy/`. There is also no assembled entry point — no
+`__main__`, no CLI, no `[project.scripts]` — so `envelope/`, `registry/` and
+`canonical/` have no in-repo production caller yet. `docs/review/2026-09-19-round-5-repository-gap-analysis.md`
+records that gap and the task that closes it.
+
 ### 2.3 Deployment topology (v1 reference)
 - Gateway, PDP sidecar, critic workers and token service run as one Kubernetes pod group (or Compose stack) per tenant; PDP and critics have `NetworkPolicy` deny-all egress except the gateway.
 - Broker runs in a separate pod with the tool credentials; only the gateway's service identity may call it (mTLS / SPIFFE identity).
