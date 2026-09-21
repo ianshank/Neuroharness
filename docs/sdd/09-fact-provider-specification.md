@@ -399,9 +399,10 @@ Stated plainly, because `08-increment-2-plan.md` Appendix B exists for the same 
 | A real signature on any registry | **Not built.** `P0-05`, gated on `P0-13`. This document specifies the field and the refusal; the verifier is someone else's task. |
 | Provider timeout default | **Not present.** `src/neuroharness/defaults.py` has no fact-provider constant; `P1-18` adds one rather than hard-coding `timeout_ms` anywhere. |
 
-Two things this document deliberately does **not** settle:
+**Settled here by citation:** `D-7` (2026-09-20 — Yes). Missing or stale *required* facts may warrant human escalation when the class opts in. Normative rules: [ADR-0027](adr/ADR-0027-d7-required-fact-escalation.md). Loosen `FactRequirement._check_escalation`; `FactState` check is `escalatable` ⇒ class permits fact escalation; keep resolver arm and truth-table rows; land the §6 killing fixture from `08-increment-2-plan.md`. The pre-decision inert shape (e.g. `rollback` with optional `deploy_state` escalatable) remains valid; required+escalatable becomes constructible under the ADR.
 
-- **`D-7` (answered 2026-09-20 — Yes).** Missing or stale *required* facts may warrant human escalation when the class opts in. Normative rules: [ADR-0027](adr/ADR-0027-d7-required-fact-escalation.md). Loosen `FactRequirement._check_escalation`; `FactState` check is `escalatable` ⇒ class permits fact escalation; keep resolver arm and truth-table rows; land the conditional §6 killing fixture from `08-increment-2-plan.md`. The pre-decision inert shape (e.g. `rollback` with optional `deploy_state` escalatable) remains valid; required+escalatable becomes constructible under the ADR.
+One thing this document deliberately does **not** settle:
+
 - **`D-1`** — the resource-key grammar. Facts are keyed on argument names, not resource keys, so this document does not depend on it; `deploy_state`'s key is `[service, target]`, not the rendered `service:{service}/target:{target}`.
 
 ---
