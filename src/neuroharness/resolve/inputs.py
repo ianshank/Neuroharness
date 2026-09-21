@@ -73,6 +73,11 @@ _FACT_REASON_BY_STATUS: Final[Mapping[FactStatus, ReasonName]] = MappingProxyTyp
     }
 )
 
+#: Escalation reasons whose eligibility depends on a fact (ADR-0027, section 5.5).
+_FACT_ESCALATION_REASONS: Final[frozenset[ReasonName]] = frozenset(
+    {ReasonName.FACT_MISSING, ReasonName.FACT_STALE}
+)
+
 
 def _check_reason_subject(value: str, *, field_name: str, example: ReasonName) -> None:
     """Reject an identifier that could not be rendered into a reason code.
@@ -199,9 +204,72 @@ class FactState:
     status: FactStatus
     required: bool = True
     escalatable: bool = False
+    class_policy: ClassPolicy | None = None
 
     def __post_init__(self) -> None:
         _check_reason_subject(self.name, field_name="name", example=ReasonName.FACT_MISSING)
+        if self.class_policy is not None:
+            self.validate_class_permission(self.class_policy)
+
+    def validate_class_permission(self, policy: ClassPolicy) -> None:
+        """Validate class permission for escalatable facts (ADR-0027).
+
+        If a fact is escalatable, the class must permit fact escalation.
+        Applies status-specific checks:
+        - PROVIDER_ERROR is infrastructure and may never escalate via fact arm.
+        - MISSING requires FACT_MISSING in escalate_on.
+        - STALE requires FACT_STALE in escalate_on.
+        - Any escalatable fact requires non-empty escalate_on ∩ {FACT_MISSING, FACT_STALE}
+          and an approvable class.
+        """
+        if not self.escalatable:
+            return
+        if self.status is FactStatus.PROVIDER_ERROR:
+            raise ConfigurationError(
+                f"fact {self.name!r} has status PROVIDER_ERROR and cannot be escalatable; "
+                "provider outages are non-escalating infrastructure (ADR-0027, section 5.5)"
+            )
+        permitted = policy.escalate_on & _FACT_ESCALATION_REASONS
+        if not permitted:
+            raise ConfigurationError(
+                f"fact {self.name!r} is marked escalatable, but class policy "
+                "declares no fact escalation reasons in escalate_on (ADR-0027)"
+            )
+        if not policy.approvable:
+            raise ConfigurationError(
+                f"fact {self.name!r} is marked escalatable, but class policy "
+                "is not approvable; an abstention cannot escalate to an approval "
+                "nobody is permitted to give (ADR-0027, FR-33)"
+            )
+        if self.status is FactStatus.MISSING and ReasonName.FACT_MISSING not in policy.escalate_on:
+            raise ConfigurationError(
+                f"fact {self.name!r} is MISSING and escalatable, but class policy "
+                "does not list FACT_MISSING in escalate_on (ADR-0027)"
+            )
+        if self.status is FactStatus.STALE and ReasonName.FACT_STALE not in policy.escalate_on:
+            raise ConfigurationError(
+                f"fact {self.name!r} is STALE and escalatable, but class policy "
+                "does not list FACT_STALE in escalate_on (ADR-0027)"
+            )
+
+    @classmethod
+    def for_class(
+        cls,
+        policy: ClassPolicy,
+        name: str,
+        status: FactStatus,
+        *,
+        required: bool = True,
+        escalatable: bool = False,
+    ) -> FactState:
+        """Construct a FactState validated against class policy permission (ADR-0027)."""
+        return cls(
+            name=name,
+            status=status,
+            required=required,
+            escalatable=escalatable,
+            class_policy=policy,
+        )
 
     @property
     def blocks(self) -> bool:

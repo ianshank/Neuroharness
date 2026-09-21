@@ -704,3 +704,62 @@ def test_a_refusal_without_a_reason_cannot_be_constructed() -> None:
         with pytest.raises(ValueError, match="at least one reason code"):
             Resolution(verdict=verdict)
     assert Resolution(verdict=Verdict.ALLOW).reason_codes == ()
+
+
+def test_fact_state_class_permission_validation() -> None:
+    """ADR-0027: FactState validates class permission for escalatable facts."""
+    from neuroharness.errors import ConfigurationError
+
+    non_approvable = SimpleClassPolicy(
+        approvable=False,
+        escalate_on=frozenset({ReasonName.FACT_MISSING, ReasonName.FACT_STALE}),
+    )
+    no_fact_reasons = SimpleClassPolicy(
+        approvable=True,
+        escalate_on=frozenset({ReasonName.SOLVER_TIMEOUT}),
+    )
+    stale_only = SimpleClassPolicy(
+        approvable=True,
+        escalate_on=frozenset({ReasonName.FACT_STALE}),
+    )
+    missing_only = SimpleClassPolicy(
+        approvable=True,
+        escalate_on=frozenset({ReasonName.FACT_MISSING}),
+    )
+    both_reasons = SimpleClassPolicy(
+        approvable=True,
+        escalate_on=frozenset({ReasonName.FACT_MISSING, ReasonName.FACT_STALE}),
+    )
+
+    # Non-escalatable fact always passes
+    f_non_esc = FactState.for_class(no_fact_reasons, name="ci_result", status=FactStatus.STALE)
+    assert not f_non_esc.escalatable
+
+    # PROVIDER_ERROR cannot be escalatable
+    with pytest.raises(ConfigurationError, match="PROVIDER_ERROR"):
+        FactState.for_class(both_reasons, name="ci_result", status=FactStatus.PROVIDER_ERROR, escalatable=True)
+
+    # Escalatable without fact reasons in escalate_on
+    with pytest.raises(ConfigurationError, match="declares no fact escalation reasons"):
+        FactState.for_class(no_fact_reasons, name="ci_result", status=FactStatus.STALE, escalatable=True)
+
+    # Escalatable on non-approvable class
+    with pytest.raises(ConfigurationError, match="not approvable"):
+        FactState.for_class(non_approvable, name="ci_result", status=FactStatus.STALE, escalatable=True)
+
+    # MISSING without FACT_MISSING in escalate_on
+    with pytest.raises(ConfigurationError, match="FACT_MISSING in escalate_on"):
+        FactState.for_class(stale_only, name="ci_result", status=FactStatus.MISSING, escalatable=True)
+
+    # STALE without FACT_STALE in escalate_on
+    with pytest.raises(ConfigurationError, match="FACT_STALE in escalate_on"):
+        FactState.for_class(missing_only, name="ci_result", status=FactStatus.STALE, escalatable=True)
+
+    # Valid MISSING with class permission
+    f_missing = FactState.for_class(missing_only, name="ci_result", status=FactStatus.MISSING, escalatable=True)
+    assert f_missing.escalatable and f_missing.blocks
+
+    # Valid STALE with class permission
+    f_stale = FactState.for_class(stale_only, name="ci_result", status=FactStatus.STALE, escalatable=True)
+    assert f_stale.escalatable and f_stale.blocks
+

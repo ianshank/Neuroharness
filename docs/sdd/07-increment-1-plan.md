@@ -84,6 +84,7 @@ it adds a third lifecycle state to `05-evaluation-plan.md` §1a.
 | `MUT-30` | Resource-key enumeration rejects `Production` and `prod-eu` (`FR-02`, `FR-34`, threat `T-17`). |
 | `MUT-34` | Resolution step 6 denies when the class is not approvable (`FR-45`). |
 | `MUT-36` | Revocation list checked at verification (`FR-21`). |
+| `MUT-40` | Fact escalation permission and required fact escalation (`D-7`, `ADR-0027`). |
 
 **`partial` (this increment owns part of the check; the fixture is blocking at
 that layer and is *not* counted toward hard-gate coverage until its owner lands):**

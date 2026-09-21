@@ -23,6 +23,7 @@ from neuroharness.errors import (
 from neuroharness.models.common import CriticKind, EffectClass, Mode
 from neuroharness.reason import ESCALATABLE_REASONS, ReasonName
 from neuroharness.registry.models import (
+    FACT_ESCALATION_REASONS,
     ActionClass,
     ActionClassRegistry,
     BatchPolicy,
@@ -120,8 +121,16 @@ def test_action_class_satisfies_the_class_policy_protocol() -> None:
 
 @pytest.mark.parametrize("reason", sorted(ESCALATABLE_REASONS, key=lambda r: r.value))
 def test_rule_a_accepts_every_escalatable_reason(reason: ReasonName) -> None:
-    facts = (FactRequirement(name="deploy_state", key=("service",), max_age_seconds=60,
-                             required=False, escalatable=True),)
+    is_fact_reason = reason in FACT_ESCALATION_REASONS
+    facts = (
+        FactRequirement(
+            name="deploy_state",
+            key=("service",),
+            max_age_seconds=60,
+            required=False,
+            escalatable=is_fact_reason,
+        ),
+    )
     entry = action_class(escalate_on=[reason], required_facts=facts)
     assert entry.escalate_on == frozenset({reason})
 
@@ -402,7 +411,7 @@ def test_rule_h_rejects_a_schema_that_is_not_an_object(schema: dict[str, Any]) -
     assert "FR-02" in message(exc)
 
 
-# --- rule (j): a required fact is never escalatable (section 5.5) -----------
+# --- rule (j): a required fact may be escalatable when class opts in (ADR-0027, section 5.5)
 
 
 def test_rule_j_accepts_a_required_non_escalatable_fact() -> None:
@@ -421,15 +430,30 @@ def test_rule_j_accepts_an_optional_escalatable_fact() -> None:
     assert fact.escalatable and not fact.required
 
 
-def test_rule_j_rejects_a_required_escalatable_fact() -> None:
-    """A required fact *is* the evidence the gate checks (``WF-04``, ``WF-05``)."""
+def test_rule_j_accepts_a_required_escalatable_fact() -> None:
+    """A required fact MAY be escalatable when class opts in (ADR-0027)."""
+    fact = FactRequirement(
+        name="ci_result", key=("service", "version"), max_age_seconds=900,
+        required=True, escalatable=True,
+    )
+    assert fact.required and fact.escalatable
+
+
+def test_rule_b3_rejects_escalatable_fact_without_class_permission() -> None:
+    """An escalatable fact requires fact reasons in escalate_on (ADR-0027)."""
+    facts = (FactRequirement(name="deploy_state", key=("service",), max_age_seconds=60,
+                             required=True, escalatable=True),)
     with pytest.raises(ValidationError) as exc:
-        FactRequirement(
-            name="ci_result", key=("service", "version"), max_age_seconds=900,
-            required=True, escalatable=True,
-        )
-    assert "required and escalatable" in message(exc)
-    assert "section 5.5" in message(exc)
+        action_class(escalate_on=[], required_facts=facts)
+    assert "class permission" in message(exc)
+
+
+def test_rule_b3_accepts_escalatable_fact_with_class_permission() -> None:
+    """A required escalatable fact is accepted when class permits (ADR-0027)."""
+    facts = (FactRequirement(name="deploy_state", key=("service",), max_age_seconds=60,
+                             required=True, escalatable=True),)
+    entry = action_class(escalate_on=[ReasonName.FACT_STALE], required_facts=facts)
+    assert entry.required_facts[0].escalatable
 
 
 def test_fact_requirement_rejects_a_duplicated_key_component() -> None:

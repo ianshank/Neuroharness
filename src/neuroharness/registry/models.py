@@ -127,22 +127,12 @@ class FactRequirement(RevalidatingModel):
 
     @model_validator(mode="after")
     def _check_escalation(self) -> FactRequirement:
-        """Rule (j): a required fact may never be escalatable (section 5.5).
+        """Rule (j) amended by ADR-0027 (section 5.5).
 
-        Section 5.5 permits ``FACT_MISSING``/``FACT_STALE`` escalation only for
-        facts the class marks ``escalatable``, and says "never for evidence
-        facts marked ``required: true``". The reason is substantive, not
-        bookkeeping: a required fact *is* the evidence the gate exists to check.
-        Letting a human wave through its absence converts the gate into a
-        formality, which is precisely the failure mode ``WF-04`` (CI evidence)
-        and ``WF-05`` (change record) are there to prevent.
+        A fact marked required: true MAY be escalatable: true when the class
+        also opts in via escalate_on. Class-level permission is checked on
+        ActionClass.
         """
-        if self.required and self.escalatable:
-            raise ValueError(
-                f"fact {self.name!r} is both required and escalatable; a required fact "
-                "is the evidence the gate checks, so its absence may never be escalated "
-                "to a human (section 5.5)"
-            )
         return self
 
     @model_validator(mode="after")
@@ -288,6 +278,23 @@ class ActionClass(RevalidatingModel):
                 f"escalate_on lists {sorted(r.value for r in declared)} but no required "
                 "fact is marked escalatable, so the escalation can never apply "
                 "(section 5.5)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_escalatable_facts_permission(self) -> ActionClass:
+        """Rule (b3): an escalatable fact requires class permission (ADR-0027).
+
+        A fact may be marked ``escalatable: true`` only when the class permits
+        fact escalation by listing at least one fact escalation reason
+        (``FACT_MISSING`` or ``FACT_STALE``) in ``escalate_on`` (section 5.5).
+        """
+        escalatable_facts = [fact.name for fact in self.required_facts if fact.escalatable]
+        if escalatable_facts and not (self.escalate_on & FACT_ESCALATION_REASONS):
+            raise ValueError(
+                f"fact(s) {escalatable_facts} are marked escalatable, but escalate_on "
+                "declares no fact escalation reasons; a fact cannot be escalatable "
+                "without class permission (ADR-0027, section 5.5)"
             )
         return self
 

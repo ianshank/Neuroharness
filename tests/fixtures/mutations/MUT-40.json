@@ -1,0 +1,8 @@
+{
+  "id": "MUT-40",
+  "state": "active",
+  "phase": 1,
+  "gate": "Fact escalation (D-7)",
+  "mutation": "Required fact marked escalatable without class permission",
+  "expected": "REQUIRES_APPROVAL when permitted; rejected without class permission"
+}
