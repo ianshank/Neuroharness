@@ -1,5 +1,6 @@
 {
   "note": "Every hard critic declared `mode: enforce` in a registry this build loads, and the `active` mutation fixture Constitution Article IV says it cannot exist without. Each entry below is a hard gate the registry claims and no fixture proves. The count is published so a green `hard-rules-have-fixtures` check reads as \"the register is consistent\" and never as \"Article IV is satisfied\". The list may only shrink: a critic leaves it by moving to `covered` with a fixture that is declared `active`, and a hard enforcing critic that appears in neither list fails the check. Every entry currently carries at least one candidate fixture; before the change that landed this register, four of the seventeen had no catalogue identifier at all (`WF-05`, `WF-06b`, `WF-06c` and the typed contract), which is why `MUT-37`, `MUT-38`, `MUT-39` and `MUT-08b` were reserved alongside it.",
+  "exemption": "ADR-0028",
   "gap_count": 17,
   "gaps": [
     {

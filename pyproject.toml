@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A fail-closed policy-and-verification harness for LLM agent tool calls"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "UNLICENSED" }
+license = { text = "Apache-2.0" }
 dependencies = ["pydantic>=2.7,<3"]
 
 [project.optional-dependencies]

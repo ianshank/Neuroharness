@@ -92,9 +92,16 @@ Demoting on an integrity failure would turn a tampered bundle into unguarded exe
 | SOC 2 (change management, logical access) | Reviewed changes; least privilege | Two-person rule; broker-only credentials; signed bundles. |
 The harness produces evidence; it does not by itself make a deployment compliant. This table is an **indicative mapping, not compliance-as-code**, and has not been reviewed by counsel (`R-22`).
 
-## 8. RACI (to be confirmed in `P0-12`)
+## 8. RACI (interim mapping under `P0-12`)
 
 Roles referenced by other documents that must be mapped to real people in `P0-12` (`OQ-10`): **workflow owner** (labelling; product owner is the natural fit), **second security reviewer** (so separation of duties does not rest on one person), **compliance contact** (`OQ-05`), **agent-developer contact** (`OQ-04`), **override group** (`FR-48`). v1 is **business-hours support with no on-call rota**, which is why `NFR-10` states the SLO as a target rather than a commitment.
+
+> **Interim P0-12 assignment (2026-09-21):**
+> - **Ian Cruickshank** is the sole interim workflow owner, security reviewer, and override authority.
+> - Other roles remain TBD; compliance contact remains TBD (`OQ-05`).
+> - **Known gap:** The requirement for two-person hard-gate review remains an explicit known gap until a second person is named. Do **not** invent or placeholder a second reviewer.
+> - ADR acceptances may proceed with Ian as sole named reviewer for now.
+> - **P0-13 deferral (2026-09-21):** KMS, object storage, staging cluster, and CI service identities are explicitly deferred. Increment 3 may proceed `P1-06a`-first only per `08-increment-2-plan.md` risk `R-D`. KMS and staging owners are not resolved and work must not block on `P0-13`.
 | Activity | Product | Tech lead | Security | Policy owner | Eval lead | Delivery | SRE |
 |---|---|---|---|---|---|---|---|
 | Spec changes | A | R | C | C | C | I | I |
