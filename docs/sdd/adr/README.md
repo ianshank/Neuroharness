@@ -15,7 +15,7 @@ Format: [MADR](https://adr.github.io/madr/) (Context → Decision → Alternativ
 | [ADR-0009](ADR-0009-reference-implementation-stack.md) | Reference implementation stack | **Superseded by ADR-0019** | Technical plan |
 | [ADR-0010](ADR-0010-progressive-enforcement-rollout.md) | Progressive enforcement rollout: shadow → advisory → enforce | **Superseded by ADR-0016** | Peer review M10 |
 | [ADR-0011](ADR-0011-reference-workflow-deployment.md) | Service deployment is the reference workflow | Proposed | `P0-02`, `OQ-02` |
-| [ADR-0012](ADR-0012-licence-and-contribution-model.md) | Licence and contribution model (contribution decided; licence escalated) | Proposed | `P0-11`, `OQ-09` |
+| [ADR-0012](ADR-0012-licence-and-contribution-model.md) | Licence and contribution model (Apache-2.0 decided by owner) | Accepted | `P0-11`, `OQ-09` |
 | [ADR-0013](ADR-0013-temporal-property-compiler.md) | Temporal property compiler: bounded LTLf subset, built in-house | Proposed | Round 2 `R2-D17`, `R2-B8` |
 | [ADR-0014](ADR-0014-verdict-resolution-order.md) | Verdict resolution order, safety order and escalation limits | Proposed (supersedes 0007; **amended** after a property test disproved its monotonicity claim) | Round 2 `R2-S3`, `R2-C1`, `R2-C7`, `R2-C8` |
 | [ADR-0015](ADR-0015-proposal-digest-and-approval-reevaluation.md) | Two digests, and approval as a fact that triggers re-evaluation | Proposed (supersedes 0008) | Round 2 `R2-S2`, `R2-C2`, `R2-B1` |
@@ -31,3 +31,4 @@ Format: [MADR](https://adr.github.io/madr/) (Context → Decision → Alternativ
 | [ADR-0025](ADR-0025-reason-subject-grammar-at-construction.md) | One per-name reason-subject grammar, checked at construction | Proposed | Increment-2 `F-06` |
 | [ADR-0026](ADR-0026-issuance-claim-is-the-record.md) | The issuance claim is the record, and every absent token names its reason | Proposed | Increment-2 `D-4`, `D-5` |
 | [ADR-0027](ADR-0027-d7-required-fact-escalation.md) | D-7: required facts may escalate when class opts in | Accepted | Increment-2 `D-7`; product 2026-09-20 |
+| [ADR-0028](ADR-0028-hard-rule-fixture-register.md) | Hard-rule fixture register as a shrink-only durable exemption | Accepted | Increment-2 `D-8` |

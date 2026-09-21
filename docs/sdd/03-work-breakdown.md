@@ -44,9 +44,9 @@ Timeline: Phase 0 weeks 1–3 · Phase 1a weeks 4–9 · Phase 1b weeks 10–13 
 |---|---|---|---|---|---|
 | `P1-01a` | MCP gateway: tool advertisement, interception, authenticated host, server-derived session IDs | L | `P0-05`, `P0-13` | `FR-01`, `FR-06`, `SEC-12` | Direct tool access impossible in the stack; `MUT-25` reserved→active. |
 | `P1-01b` | Hook adapter (only if `OQ-04` says yes) | M | `P1-01a` | `FR-01` | One framework integrated, or the task is formally deferred. |
-| `P1-02` | Envelope builder: strip, validate argument schema, proposal/context split | M | `P0-04`, `P0-05` | `FR-02`, `FR-03` | `MUT-17`, `MUT-30` active and killed. |
+| `P1-02` | Envelope builder: strip, validate argument schema, proposal/context split | M | `P0-04`, `P0-05` | `FR-02`, `FR-03` | `MUT-07`, `MUT-30` active and killed. |
 | `P1-03` | Canonicalization, **two digests**, stamping | S | `P0-04` | `FR-04` | Digest vectors match; canonicalization idempotent under property test. |
-| `P1-04` | PDP integration: signed bundles, input builder (facts only), rule inventory, outcome mapping | L | `P0-05`, `P1-18` | `FR-50`, `SEC-01`, `SEC-05` | Unsigned bundle refused; input has no claims; passing rules recorded. |
+| `P1-04` | PDP integration: signed bundles, input builder (facts only), rule inventory, outcome mapping | L | `P0-05`, `P1-18` | `FR-50`, `SEC-01`, `SEC-05` | Unsigned bundle refused; input has no claims; passing rules recorded; `MUT-17` active and killed. |
 | `P1-05` | Verdict resolver with safety order and monotonicity property | M | `P0-08` | `FR-05`, §5.3–5.5 | Full matrix passes; hypothesis monotonicity passes. |
 | `P1-06a` | Evidence store: append-only, hash chain, write-ahead, local WAL | L | `P0-04` | `FR-70`, `NFR-05`, `NFR-12` | Updates rejected; `MUT-13`, `MUT-21` killed. |
 | `P1-06b` | Checkpoints, export, pseudonymization, crypto-shredding, retention | M | `P1-06a` | `FR-73`, `FR-74`, `NFR-16` | Chain verifier passes; export round-trips; shredding preserves the chain. |
@@ -59,7 +59,7 @@ Timeline: Phase 0 weeks 1–3 · Phase 1a weeks 4–9 · Phase 1b weeks 10–13 
 | `P1-18` | **Fact providers v1: interface, five providers plus `harness_approval`, cache, staleness, error mapping, stubs** | L | `P0-06` | `FR-10`–`FR-14`, `SEC-11` | `MUT-04`, `MUT-14`, `MUT-23` killed; stale facts arrive as value-less stubs. |
 | `P1-27` | Schema and database migration tooling | S | `P0-04` | — | Migrations run forward and back in CI. |
 
-**Exit gate P1a:** an envelope can be proposed, evaluated, recorded, tokenized and executed under enforcement, fail-closed in every mode · `MUT-01`–`MUT-05`, `MUT-07`, `MUT-09`, `MUT-10`, `MUT-12`, `MUT-12b`, `MUT-13`, `MUT-14`, `MUT-17`, `MUT-19`–`MUT-21`, `MUT-23`, `MUT-25`, `MUT-30`, `MUT-31`, `MUT-36` active and killed.
+**Exit gate P1a:** an envelope can be proposed, evaluated, recorded, tokenized and executed under enforcement, fail-closed in every mode · `MUT-01`–`MUT-05`, `MUT-07`, `MUT-09`, `MUT-10`, `MUT-12`, `MUT-12b`, `MUT-13`, `MUT-14`, `MUT-19`–`MUT-21`, `MUT-23`, `MUT-25`, `MUT-30`, `MUT-31`, `MUT-36` active and killed. Note: `MUT-17` moved to `P1-04` (PDP integration).
 
 ## Phase 1b — Oversight, evidence and observation (weeks 10–13)
 

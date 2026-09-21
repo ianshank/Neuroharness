@@ -2,7 +2,7 @@
 
 This is a fail-closed policy-and-verification harness for LLM agent tool calls. Most of what follows is ordinary; the parts that are not are the parts that exist because a shortcut here produces an unenforced gate, and an unenforced gate is worse than no gate at all — it reports green.
 
-> **Licence.** The repository is currently `UNLICENSED`, which means nobody outside the owner has permission to use, modify or distribute this code. Until a licence is chosen there is no legal basis for an outside contribution. See `docs/sdd/adr/ADR-0012-licence-and-contribution-model.md`; it is an open escalation, not an oversight.
+> **Licence.** The repository is licensed under the [Apache License, Version 2.0](LICENSE). Outside contributions are governed by this document and the contribution model decided in `docs/sdd/adr/ADR-0012-licence-and-contribution-model.md`. New source files may include the standard SPDX header: `SPDX-License-Identifier: Apache-2.0`.
 
 ## Read first
 
