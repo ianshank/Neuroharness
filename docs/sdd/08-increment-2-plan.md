@@ -110,12 +110,18 @@ Version 1 proposed "move the rule to the type: `FactState.__post_init__` refuses
 
 Pulling the thread reaches the defect one layer up. `01-specification.md:180` says escalation is *"never for **evidence** facts marked `required: true`"* — note the qualifier, which is load-bearing below. `FactRequirement._check_escalation` enforces it; a non-required fact never blocks; so **the specification defines a feature whose enabling conditions it also makes mutually exclusive.** And `ActionClass._check_escalatable_facts_exist` (`registry/models.py:274-289`) *requires* a class declaring fact escalation to carry an escalatable fact — the registry mandates a provably inert configuration. Two registry knobs are read by the resolver and can never change its output, which by §8.2 makes them decoration.
 
-So this is not a repair to schedule; it is a question for product and security (`D-7`, §11): **does a missing or stale required fact ever warrant human escalation, and is "evidence fact" a narrower class than "required fact"?**
+So this was not a repair to schedule; it was a question for product and security (`D-7`, §11): **does a missing or stale required fact ever warrant human escalation, and is "evidence fact" a narrower class than "required fact"?**
 
-- **If yes** — §5.5 is wrong, the loader rule is the bug. Loosen the loader, keep the resolver arm, keep all four truth-table rows, and the `FactState` check becomes "escalatable implies the class permits fact escalation", which a provider can actually violate.
-- **If no** — the resolver's fact-escalation arm, the per-fact `escalatable` flag, `escalate_on ∩ {FACT_MISSING, FACT_STALE, FACT_PROVIDER_ERROR}` and `_check_escalatable_facts_exist` come out together, §5.5 is amended, and the four rows go away *because the behaviour they test no longer exists* — which is not weakening a test. The two property strategies narrow with them.
+**Decision (2026-09-20): Yes.** Recorded in [ADR-0027](adr/ADR-0027-d7-required-fact-escalation.md) under the P0-12 interim (Ian Cruickshank sole owner). §5.5 and the loader rule were the bug. **Selected branch:** loosen the loader, keep the resolver arm, keep all four truth-table rows, and the `FactState` check is "escalatable implies the class permits fact escalation", which a provider can actually violate. "Evidence fact" is not treated as a separate narrower class that permanently forbids escalating all required facts.
 
-Either answer closes the hole; neither can be chosen by an engineer. **This is a hard precondition on any fact-provider work, alongside `P0-06`.**
+<details>
+<summary>Historical alternative (not selected): If no</summary>
+
+The resolver's fact-escalation arm, the per-fact `escalatable` flag, `escalate_on ∩ {FACT_MISSING, FACT_STALE, FACT_PROVIDER_ERROR}` and `_check_escalatable_facts_exist` would have come out together, §5.5 amended, and the four truth-table rows removed *because the behaviour they test no longer exists* — which would not have been weakening a test. The two property strategies would have narrowed with them.
+
+</details>
+
+**This answered `D-7` is a hard precondition on any fact-provider work, alongside `P0-06`.**
 
 ### 3.3 `EvaluationOutcome` makes the bad state unrepresentable
 
@@ -282,9 +288,9 @@ So: one declaration per scenario, each either referenced by a test or marked not
 | `MUT-26` | stays `partial` | Owes delegation-chain eligibility (`P1-10a`) |
 | `MUT-01`, `MUT-02`, `MUT-03`, `MUT-05` | stay `reserved` | Policy-rule fixtures; they need the signed Rego bundle and its two-person review (`P1-15`) |
 | **New declarations** | `reserved` | `WF-05`, `WF-06b`, `WF-06c`, SMT typed contract |
-| **New fixture, `D-7` permitting** | `active` | Whatever `D-7` decides is the invariant in §3.2, proved by a killing fixture. Version 1 promised a fixture for a repair it then retracted; this one is conditional on the decision |
+| **New fixture, `D-7` permitting** | `active` | `D-7` = Yes ([ADR-0027](adr/ADR-0027-d7-required-fact-escalation.md)): prove loader accepts `required∧escalatable` under class opt-in, resolver escalates, non-opt-in still abstains. Version 1 promised a fixture for a repair it then retracted; this one is now unconditional on the Yes decision |
 
-Census today: **5 active, 6 partial, 26 reserved**. The Phase 1a exit gate names 21 that must be active; 4 of those 21 are. This increment moves that to **6, or 7 with `D-7`**. That is a small number and the plan says so.
+Census today: **5 active, 6 partial, 26 reserved**. The Phase 1a exit gate names 21 that must be active; 4 of those 21 are. This increment moves that to **7** (`D-7` Yes: the §6 permitting fixture is in scope). That is a small number and the plan says so.
 
 ---
 
