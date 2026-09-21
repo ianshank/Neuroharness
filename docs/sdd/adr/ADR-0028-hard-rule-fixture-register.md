@@ -1,6 +1,8 @@
 # ADR-0028: Hard-rule fixture register as a shrink-only durable exemption
 
-**Status:** Proposed · **Date:** 2026-09-21 · **Deciders:** Tech lead, Security lead · **Relates to:** ADR-0016 · **Origin:** increment-2 `D-8`, `08-increment-2-plan.md` §5.5, `06-delivery-and-governance.md` §3
+**Status:** Accepted under interim P0-12 (Ian Cruickshank sole named owner/decider) · **Date:** 2026-09-21 · **Deciders:** Ian Cruickshank (interim sole decider/owner under P0-12) · **Relates to:** ADR-0016 · **Origin:** increment-2 `D-8`, `08-increment-2-plan.md` §5.5, `06-delivery-and-governance.md` §3
+
+> **Governance note (interim P0-12):** Ian Cruickshank is sole owner for workflow / policy / security acceptance of increment-2 design decisions under interim `P0-12`. The requirement for two-person hard-gate review remains an explicit known gap until a second person is named — do not invent or placeholder a second reviewer.
 
 ## Context
 
