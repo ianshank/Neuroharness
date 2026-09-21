@@ -6,6 +6,7 @@
 - **Amends:** `01-specification.md` §5.5 wording that currently reads as “never for evidence facts marked `required: true`” when read as a blanket ban on `required ∧ escalatable`
 - **Implements against:** `FactRequirement._check_escalation` (`src/neuroharness/registry/models.py`), `FactState` construction (`resolve/inputs.py`), resolver fact-escalation arm, `tests/unit/test_resolver_truth_table.py` rows, conditional fixture in `08-increment-2-plan.md` §6
 - **Precondition for:** `P1-18` fact loader / providers
+- **Approver (P0-12 interim):** Ian Cruickshank (sole owner until fuller RACI)
 
 ## Context
 
@@ -27,6 +28,12 @@ Ian’s product answer (2026-09-20): missing/stale required facts may escalate. 
 4. **Add (or verify) the conditional D-7 killing fixture** named in `08-increment-2-plan.md` §6 (“New fixture, D-7 permitting”).
 
 “Evidence fact” is **not** treated as a separate narrower class that permanently forbids escalation of all required facts. Opt-in is per-requirement (`escalatable: true`) plus class-level permission via `escalate_on`.
+
+## Ownership (P0-12 interim)
+
+`08-increment-2-plan.md` §4.4 / R-B required a named approver before D-7 could be Accepted. **Interim P0-12:** Ian Cruickshank is sole owner for workflow / policy / security acceptance of increment-2 design decisions (`D-1`–`D-8` and related ADRs) until a fuller RACI lands.
+
+This ADR’s **Accepted** status rests on that interim: product answer Yes (2026-09-20) under Ian as sole named owner. Two-person review for hard-gate policy (`P1-15`) remains a later P0-12 expansion; it does not reopen D-7.
 
 ## Normative rules for Implementer
 
