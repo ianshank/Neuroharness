@@ -1,12 +1,8 @@
 # ADR-0027: D-7 — required facts may escalate when class opts in
 
-- **Status:** Accepted (product answer 2026-09-20)
-- **Date:** 2026-09-20
-- **Decides:** `D-7` in `docs/sdd/08-increment-2-plan.md` §3.2 / §11
-- **Amends:** `01-specification.md` §5.5 wording that currently reads as “never for evidence facts marked `required: true`” when read as a blanket ban on `required ∧ escalatable`
-- **Implements against:** `FactRequirement._check_escalation` (`src/neuroharness/registry/models.py`), `FactState` construction (`resolve/inputs.py`), resolver fact-escalation arm, `tests/unit/test_resolver_truth_table.py` rows, conditional fixture in `08-increment-2-plan.md` §6
-- **Precondition for:** `P1-18` fact loader / providers
-- **Approver (P0-12 interim):** Ian Cruickshank (sole owner until fuller RACI)
+**Status:** Accepted · **Date:** 2026-09-20 · **Deciders:** Ian Cruickshank (P0-12 interim sole owner) · **Relates to:** ADR-0014 · **Origin:** increment-2 `D-7`; product answer 2026-09-20
+
+**Decides:** `D-7` in `docs/sdd/08-increment-2-plan.md` §3.2 / §11. **Amends:** `01-specification.md` §5.5 blanket ban on `required ∧ escalatable`. **Implements against:** `FactRequirement._check_escalation`, `FactState`, resolver fact-escalation arm, truth-table rows, §6 D-7 fixture. **Precondition for:** `P1-18` fact loader / providers.
 
 ## Context
 
