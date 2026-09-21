@@ -83,7 +83,7 @@ Wire the fixture into the hard-rules / mutation register when landed so a silent
 
 ## Spec text to amend (same change or follow-on)
 
-1. `01-specification.md` §5.5 — replace blanket “never for evidence facts marked `required: true`” with: required facts escalate only when marked `escalatable: true` **and** the class lists the matching fact reason in `escalate_on`; otherwise missing/stale required facts abstain.
+1. `01-specification.md` §5.5 — **done on this PR:** required facts escalate only when marked `escalatable: true` **and** the class lists the matching fact reason in `escalate_on`; otherwise missing/stale required facts abstain. (Replaces blanket “never for evidence facts marked `required: true`”.)
 2. `09-fact-provider-specification.md` §3.3 / §9 — mark `D-7` **decided** by this ADR; FactState mapping notes cite ADR-0027.
 3. `08-increment-2-plan.md` §3.2 / §11 D-7 row — status **Answered: Yes**; point to this ADR and the §6 fixture.
 
