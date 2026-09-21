@@ -117,6 +117,7 @@ Every fixture is a checked-in envelope or trajectory plus an expected verdict/re
 | `MUT-37` | `WF-05` change record | Production target whose change-approval fact is bound to a different `(service, version, target)` | `DENY RULE_FAILED:WF-05` | 1 |
 | `MUT-38` | `WF-06b` change window | Token issue attempted outside the class's declared change window on the trusted clock | `DENY RULE_FAILED:WF-06b` | 1 |
 | `MUT-39` | `WF-06c` mutual exclusion | Second deployment proposed while a fresh `deploy_state` fact reports one in flight for the same `(service, target)` | `DENY RULE_FAILED:WF-06c` | 1 |
+| `MUT-40` | Fact escalation (`D-7`) | Required fact marked escalatable without class permission | `REQUIRES_APPROVAL` when permitted; rejected without class permission | 1 |
 
 `MUT-02` is split: `MUT-02` (approvable class → `REQUIRES_APPROVAL APPROVAL_REQUIRED:WF-02`) and `MUT-34` (non-approvable → `DENY`). `MUT-12` is split into `MUT-12` (engine unreachable) and `MUT-12b` (bundle integrity); `MUT-08` is split the same way into `MUT-08` (the solver cannot answer) and `MUT-08b` (the contract is answered and violated). `MUT-08` expects exactly `SOLVER_TIMEOUT:smt.version-contract`; no wildcards. `MUT-24` covers the Phase 3 monitor precedence property and is evaluated as a shadow kill (recorded `would_be_verdict` = `DENY`) while the monitor is advisory.
 

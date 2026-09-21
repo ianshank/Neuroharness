@@ -440,8 +440,8 @@ def deploy_entry(document: dict[str, Any]) -> dict[str, Any]:
         ),
         pytest.param(
             lambda e: e["required_facts"][0].__setitem__("escalatable", True),
-            "required and escalatable",
-            id="rule-j-required-escalatable-fact",
+            "class permission",
+            id="rule-b3-escalatable-fact-without-class-permission",
         ),
     ],
 )

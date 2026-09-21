@@ -31,16 +31,17 @@ from pydantic import ValidationError
 
 from neuroharness.envelope.arguments import BoundedSchemaValidator, ViolationKind
 from neuroharness.errors import (
+    ConfigurationError,
     RegistryValidationError,
     TokenModeMismatchError,
     TokenRevokedError,
 )
-from neuroharness.models.common import Digest, Mode, Verdict
+from neuroharness.models.common import Digest, FactStatus, Mode, Verdict
 from neuroharness.models.record import Override
 from neuroharness.reason import ReasonName
 from neuroharness.registry.loader import compute_registry_digest, load_registry
 from neuroharness.registry.resource_keys import ResourceKeyRegistry, render_template
-from neuroharness.resolve.inputs import ResolutionRequest, SimpleClassPolicy
+from neuroharness.resolve.inputs import FactState, ResolutionRequest, SimpleClassPolicy
 from neuroharness.resolve.resolver import resolve
 from neuroharness.seams import DeterministicUuidGenerator, FrozenClock
 from neuroharness.tokens.nonce import ConsumeOutcome, InMemoryNonceStore, InMemoryRevocationList
@@ -606,3 +607,117 @@ def test_mut_07_an_undeclared_argument_is_detected_at_evaluation() -> None:
     violations = BoundedSchemaValidator().validate(arguments | {"dry_run": True}, schema)
     assert [v.kind for v in violations] == [ViolationKind.UNDECLARED_ARGUMENT]
     assert violations[0].pointer == "/dry_run"
+
+
+# --- MUT-40 (active): required fact escalation (D-7, ADR-0027) -----------------
+
+
+def test_mut_40_loader_accepts_opt_in_and_stale_required_escalates() -> None:
+    """``D-7`` (ADR-0027): required fact escalation when class opts in.
+
+    1. Loader accepts required=true, escalatable=true when class has fact
+       escalation reasons in escalate_on.
+    2. Stale required fact escalates to REQUIRES_APPROVAL with FACT_STALE reason.
+    """
+    assert declaration("MUT-40")["state"] == "active"
+
+    doc = registry_document()
+    entry = doc["action_classes"][0]
+    entry["escalate_on"] = ["FACT_STALE"]
+    entry["required_facts"][0]["escalatable"] = True
+
+    registry = load_registry(resign(doc))
+    target_class = registry.get(entry["tool"], entry["intent"])
+    assert target_class.required_facts[0].required
+    assert target_class.required_facts[0].escalatable
+
+    # Stale required fact on this class escalates to REQUIRES_APPROVAL
+    stale_fact = FactState(
+        name="ci_result",
+        status=FactStatus.STALE,
+        required=True,
+        escalatable=True,
+        class_policy=target_class,
+    )
+    request = ResolutionRequest(
+        policy=target_class,
+        fact_states=(stale_fact,),
+    )
+    res = resolve(request)
+    assert res.verdict is Verdict.REQUIRES_APPROVAL
+    assert res.primary_reason is not None
+    assert res.primary_reason.name is ReasonName.FACT_STALE
+    assert res.primary_reason.subject == "ci_result"
+
+
+def test_mut_40_escalatable_without_class_permission_fails_closed() -> None:
+    """``D-7`` (ADR-0027): escalatable without class permission fails closed."""
+    # 1. Loader rejects class where fact is escalatable but escalate_on has no fact reasons
+    doc = registry_document()
+    entry = doc["action_classes"][0]
+    entry["escalate_on"] = []
+    entry["required_facts"][0]["escalatable"] = True
+    with pytest.raises(RegistryValidationError, match="class permission"):
+        load_registry(resign(doc))
+
+    # 2. FactState construction with class_policy fails closed when policy lacks permission
+    policy_without_permission = SimpleClassPolicy(
+        mode=Mode.ENFORCE,
+        approvable=True,
+        escalate_on=frozenset({ReasonName.SOLVER_TIMEOUT}),
+    )
+    with pytest.raises(ConfigurationError, match="class policy"):
+        FactState(
+            name="ci_result",
+            status=FactStatus.STALE,
+            required=True,
+            escalatable=True,
+            class_policy=policy_without_permission,
+        )
+
+
+def test_mut_40_non_escalatable_required_abstains_and_provider_error_never_escalates() -> None:
+    """``D-7`` (ADR-0027): non-escalatable required abstains; PROVIDER_ERROR never escalates."""
+    policy = SimpleClassPolicy(
+        mode=Mode.ENFORCE,
+        approvable=True,
+        escalate_on=frozenset({ReasonName.FACT_STALE, ReasonName.FACT_MISSING}),
+    )
+
+    # Non-escalatable required fact -> ABSTAIN
+    non_esc_fact = FactState(
+        name="ci_result",
+        status=FactStatus.STALE,
+        required=True,
+        escalatable=False,
+        class_policy=policy,
+    )
+    req_non_esc = ResolutionRequest(policy=policy, fact_states=(non_esc_fact,))
+    res_non_esc = resolve(req_non_esc)
+    assert res_non_esc.verdict is Verdict.ABSTAIN
+    assert res_non_esc.primary_reason is not None
+    assert res_non_esc.primary_reason.name is ReasonName.FACT_STALE
+
+    # Provider error never escalates via fact arm: FactState validation rejects escalatable PROVIDER_ERROR
+    with pytest.raises(ConfigurationError, match="PROVIDER_ERROR"):
+        FactState(
+            name="ci_result",
+            status=FactStatus.PROVIDER_ERROR,
+            required=True,
+            escalatable=True,
+            class_policy=policy,
+        )
+
+    # And even through raw FactState without class_policy, resolver yields ABSTAIN
+    raw_provider_error = FactState(
+        name="ci_result",
+        status=FactStatus.PROVIDER_ERROR,
+        required=True,
+        escalatable=True,
+    )
+    req_prov = ResolutionRequest(policy=policy, fact_states=(raw_provider_error,))
+    res_prov = resolve(req_prov)
+    assert res_prov.verdict is Verdict.ABSTAIN
+    assert res_prov.primary_reason is not None
+    assert res_prov.primary_reason.name is ReasonName.FACT_PROVIDER_ERROR
+
